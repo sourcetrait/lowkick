@@ -1,6 +1,6 @@
-![LowKick Logo] LowKick
+LowKick
 ================================================================================
-[![License Badge]][License]
+![LowKick Logo] [![License Badge]][License]
 
 Virtual System
 
