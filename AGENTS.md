@@ -27,7 +27,7 @@ Entertainment usage targets a gamepad + monitor configuration:
 QEMU guest systems operate on Fedora CoreOS.
 Within the guest, Podman containers run apps, operating on Fedora Minimal.
 
-One application runs at a time and is interacts directly with system devices.
+One application runs at a time and interacts directly with system devices.
 
 Applications are written in Rust and are relatively low-level:
 - Graphic rendering is direct, via Linux DRM.
