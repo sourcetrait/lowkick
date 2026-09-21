@@ -1,8 +1,8 @@
 LowKick
 ================================================================================
-![LowKick Logo] [![License Badge]][License]
+[![License Badge]][License]
 
-Virtual System
+![LowKick Logo] Virtual System
 
 Repository
 --------------------------------------------------------------------------------
