@@ -1,4 +1,4 @@
-LowKick
+![LowKick Logo] LowKick
 ================================================================================
 [![License Badge]][License]
 
@@ -48,3 +48,4 @@ If not, see https://www.gnu.org/licenses/.
 [Docs Badge]: https://img.shields.io/badge/docs-blue
 [License]: #License-AGPL3
 [License Badge]: https://img.shields.io/badge/license-AGPL3-blue.svg
+[LowKick Logo]: ./asset/img/logo/lowkick.40x40.svg
