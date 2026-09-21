@@ -1,0 +1,15 @@
+qemu-system-aarch64 \
+  -machine virt,accel=hvf,highmem=on \
+  -cpu host -smp 4 -m 4G \
+  -drive file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd,if=pflash,format=raw,readonly=on \
+  -drive file=$HOME/.sys/mnt/vm/uefi/lowkick.fd,if=pflash,format=raw \
+  -drive if=virtio,format=qcow2,file=$HOME/.sys/mnt/vm/disk/fedora-coreos.qemu.aarch64.qcow2 \
+  -fw_cfg name=opt/com.coreos/config,file=fcos.ign \
+  -device virtio-gpu-pci \
+  -display cocoa \
+  -device qemu-xhci \
+  -device virtio-keyboard-pci \
+  -device virtio-tablet-pci \
+  -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+  -device virtio-net-pci,netdev=net0 \
+  -serial mon:stdio
