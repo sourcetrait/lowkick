@@ -77,13 +77,15 @@ def update_fcos [cfg: record]: nothing -> nothing {
     cd $cfg.dir.fcos.latest
     print $"($LOG) Downloading latest Fedora CoreOS ..."
     http get $url | save $filename_xz
-    print $"($LOG) Extracting latest Fedora Core OS ..."
+    print $"($LOG) Extracting latest Fedora CoreOS ..."
     xz -d $filename_xz
+    
     for $file in (ls ('.' | path join '*.*' | into glob) | get name) {
         if $file != $filename and (($file | path type) == 'file') {
             rm $file
         }
     }
+    
     cd $cfg.dir.qemu.image
     rm -f 'fcos.qcow2'
     ln -s ('fcos' | path join 'latest' $filename) 'fcos.qcow2'
