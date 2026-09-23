@@ -1,0 +1,7 @@
+[package]
+name = "bounce"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+drm.workspace = true

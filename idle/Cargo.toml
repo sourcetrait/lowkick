@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/bounce"
+]
+
+[workspace.package]
+version = "0.0.0-3"
+edition = "2024"
+authors = ["SourceTrait <development@sourcetrait.com"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/sourcetrait/lowkick"
+homepage = "https://sourcetrait.com"
+categories = []
+keywords = []
+
+[workspace.dependencies]
+drm = "0.15"
