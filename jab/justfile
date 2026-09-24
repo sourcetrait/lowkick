@@ -1,0 +1,58 @@
+# LowKick Jab: build the kernel and test programs, run them under QEMU.
+#
+# Needs a riscv64 GNU binutils on PATH as riscv64-unknown-linux-gnu-*, or
+# JAB_CROSS set to another prefix (an absolute path works), and
+# qemu-system-riscv64. Artifacts land under target/, which git ignores.
+
+cross := env("JAB_CROSS", "riscv64-unknown-linux-gnu-")
+asm := cross + "as"
+link := cross + "ld"
+objcopy := cross + "objcopy"
+objdump := cross + "objdump"
+qemu := "qemu-system-riscv64"
+target := "target"
+kernel_dir := target / "kernel"
+program_base := "0x80800000"
+machine := "-machine virt -cpu rv64 -accel tcg -smp 4 -global virtio-mmio.force-legacy=false"
+devices := "-device virtio-gpu-device,xres=1920,yres=1080 -device virtio-keyboard-device -device virtio-tablet-device -device virtio-net-device,netdev=net0 -netdev user,id=net0 -device virtio-sound-device,audiodev=snd0 -audiodev none,id=snd0 -device virtio-rng-device"
+
+default: kernel
+
+# Assemble and link the kernel to target/kernel/jab.elf
+kernel:
+    mkdir -p {{kernel_dir}}
+    for f in kernel/*.S; do {{asm}} -I kernel/include -I sdk "$f" -o {{kernel_dir}}/$(basename "${f%.S}").o; done
+    {{link}} -T kernel/link.ld -nostdlib {{kernel_dir}}/*.o -o {{kernel_dir}}/jab.elf
+    {{objdump}} -d {{kernel_dir}}/jab.elf > {{kernel_dir}}/jab.disas
+
+# Build prog/test/<name>/<name>.S to target/prog/test/<name>/<name>.jab
+prog name:
+    mkdir -p {{target}}/prog/test/{{name}}
+    {{asm}} -I sdk prog/test/{{name}}/{{name}}.S -o {{target}}/prog/test/{{name}}/{{name}}.o
+    {{link}} -T sdk/program.ld -nostdlib {{target}}/prog/test/{{name}}/{{name}}.o -o {{target}}/prog/test/{{name}}/{{name}}.elf
+    {{objcopy}} -O binary {{target}}/prog/test/{{name}}/{{name}}.elf {{target}}/prog/test/{{name}}/{{name}}.jab
+
+# Create the block image the full run attaches
+disk:
+    mkdir -p {{target}}
+    test -f {{target}}/disk.img || truncate -s 64M {{target}}/disk.img
+
+# Run a test program with the console window and the UART on stdio
+run name: kernel (prog name) disk
+    {{qemu}} {{machine}} -m 4G {{devices}} \
+        -drive if=none,id=disk0,file={{target}}/disk.img,format=raw -device virtio-blk-device,drive=disk0 \
+        -bios none -kernel {{kernel_dir}}/jab.elf \
+        -device loader,file={{target}}/prog/test/{{name}}/{{name}}.jab,addr={{program_base}},force-raw=on \
+        -display default -serial stdio -monitor none
+
+# Run a test program headless for up to `seconds`, the UART captured to
+# target/prog/test/<name>/serial.log; exits with the program's status
+test name seconds="10": kernel (prog name)
+    timeout --signal=TERM {{seconds}} {{qemu}} {{machine}} -m 128M \
+        -bios none -kernel {{kernel_dir}}/jab.elf \
+        -device loader,file={{target}}/prog/test/{{name}}/{{name}}.jab,addr={{program_base}},force-raw=on \
+        -display none -monitor none -serial file:{{target}}/prog/test/{{name}}/serial.log; \
+    status=$?; cat {{target}}/prog/test/{{name}}/serial.log; exit $status
+
+clean:
+    rm -rf {{target}}

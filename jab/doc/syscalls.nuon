@@ -1,0 +1,9 @@
+# Jab system calls: the table of record. The number goes in a7, each
+# argument in the register named, then `ecall`. `kind` is how the SDK
+# macro takes the argument: immediate (a constant, checked where a range
+# exists) or address (a label). sdk/jab.inc carries the same numbers.
+[
+    [name, number, args, summary];
+    [jab.exit, 1, [{name: status, kind: immediate, reg: a0}], "End the program with a status; QEMU exits with it until a launcher exists"],
+    [jab.print, 2, [{name: message, kind: address, reg: a0}], "Write a NUL-terminated string inside the program's window to the UART"]
+]
