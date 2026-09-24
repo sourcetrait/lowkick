@@ -1,22 +1,22 @@
 #!/usr/bin/env sh
 set -euo pipefail
 
-function alpine_version {
+alpine_version() {
     cut -d. -f1,2 /etc/alpine-release
 }
 
-function start_network {
+start_network() {
     ip link set eth0 up
     udhcpc -i eth0 -n -q
 }
 
-function install_packages {
+install_packages() {
     echo "https://dl-cdn.alpinelinux.org/alpine/v$(alpine_version)/main" >> /etc/apk/repositories
     apk update
     apk add bash doas libdrm-tests openssh
 }
 
-function setup_sshd {
+setup_sshd() {
     cat <<EOF > /etc/ssh/sshd_config
 AllowTcpForwarding no
 AllowAgentForwarding no
@@ -48,37 +48,43 @@ EOF
     restart_sshd
 }
 
-function setup_groups {
+setup_groups() {
     addgroup -S asusr
     addgroup -S sshusr
 }
 
-function permit_asusr {
-    echo 'permit persist :asusr' > /etc/doas.d/asusr.confg
+permit_asusr {
+    echo 'permit nopass :asusr' > /etc/doas.d/asusr.conf
+    chmod 0400 /etc/doas.d/asusr.conf
 }
 
-function restart_sshd {
+restart_sshd() {
+    rc-update add sshd
     rc-service sshd restart
 }
 
-function setup_user_admin {
+setup_user_admin() {
     local user
     user="${1:?username for admin}"
 
     setup_user "$user"
-    addgroup "$user" sudousr
+    addgroup "$user" asusr
     echo "${user}:${user}" | chpasswd
 }
 
-function setup_user {
+setup_user() {
     local user pubkey
     user="${1:?username for user}"
-    pubkey="${1:?pubkey for user}"
+    pubkey="${2:?pubkey for user}"
 
     adduser -D "$user"
     addgroup "$user" sshusr
     install -d -m 700 -o "$user" -g "$user" "/home/$user/.ssh"
     install -m 600 "$user" -g "$user" "$pubkey" "/home/$user/.ssh/authorized_keys"
+}
+
+finalize() {
+    lbu commit -d
 }
 
 start_network
@@ -88,3 +94,4 @@ permit_asusr
 setup_user kick
 setup_user_admin kickadm
 setup_sshd
+finalize
