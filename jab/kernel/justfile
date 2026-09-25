@@ -8,6 +8,7 @@
 
 set shell := ["nu", "-c"]
 set windows-shell := ["nu", "-c"]
+set quiet := true
 
 here := justfile_directory()
 manifest := here / "kernel.jab.toml"
