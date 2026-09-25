@@ -18,16 +18,16 @@
 # GPUQ_CHAINS commands. Each response's type says whether the device
 # took the command. How a list is flushed is the kernel's flush class
 # (kernel_flags, kernel.S): where the host's window charges a flush by
-# its area, each rectangle is flushed on its own; where every flush
-# costs the same, the rectangles are transferred and the one holding
-# them all is flushed once.
+# its area, each rectangle is flushed on its own, every transfer before
+# every flush so that the flushes of a list up to GPUQ_CHAINS land in
+# one batch, applied in one turn of the host's loop, and the window
+# never draws half a tick; where every flush costs the same, the
+# rectangles are transferred and the one holding them all is flushed
+# once.
 .set DISPLAY_RESOURCE, 1
 .set GPU_CMD_BYTES, 64
 .set GPU_RESP_BYTES, 24
-# a rectangle flushed on its own is two commands, so a batch presents
-# this many
-.set GPU_RECTS_PER_BATCH, (GPUQ_CHAINS / 2)
-# a transfer is one, and the last batch carries the flush
+# fixed: a transfer is one command, and the last batch carries the flush
 .set GPU_TRANSFERS_PER_BATCH, (GPUQ_CHAINS - 1)
 
 # The console: cells of FONT_WIDTH by FONT_HEIGHT, each glyph a 16-bit
@@ -200,8 +200,9 @@ sys_display_flip_rects:
 
 # display_present_rects: transfer the a1 rectangles at a0, JAB_RECT_SIZE
 # bytes each, to the host and flush them, by the kernel's flush class.
-# Scaled, each rectangle is transferred and flushed, in batches of
-# GPU_RECTS_PER_BATCH with one wait each. Fixed, each rectangle is
+# Scaled, every rectangle is transferred and then every one flushed,
+# each in batches of GPUQ_CHAINS with one wait each, so the flushes of
+# a list up to GPUQ_CHAINS are one batch. Fixed, each rectangle is
 # transferred, in batches of GPU_TRANSFERS_PER_BATCH, and the one
 # rectangle holding them all is flushed once, riding the last batch.
 # Returns 0, or 1 when a command fails.
@@ -289,33 +290,20 @@ display_present_rects:
     bnez a0, 7f
     bnez s1, 2b
     j 8f
-    # scaled: each rectangle transferred and flushed on its own
+    # scaled: every rectangle transferred, then every one flushed
 5:
-    li s2, GPU_RECTS_PER_BATCH
-    bgeu s1, s2, 6f
-    mv s2, s1                   # this batch
-6:
-    la t0, gpu_queue
-    sd zero, GPUQ_PENDING(t0)
-    li s3, 0                    # the rectangle in the batch
-17:
-    bgeu s3, s2, 18f
-    slli t0, s3, 4
-    add t0, t0, s0
-    lwu a0, JAB_RECT_X(t0)
-    lwu a1, JAB_RECT_Y(t0)
-    lwu a2, JAB_RECT_WIDTH(t0)
-    lwu a3, JAB_RECT_HEIGHT(t0)
-    call gpu_rect_commands
-    addi s3, s3, 1
-    j 17b
-18:
-    call gpu_batch_run
+    mv a0, s0
+    mv a1, s1
+    li a2, GPUQ_CHAINS
+    la a3, gpu_transfer_command
+    call gpu_rect_batches
     bnez a0, 7f
-    slli t0, s2, 4
-    add s0, s0, t0
-    sub s1, s1, s2
-    bnez s1, 5b
+    mv a0, s0
+    mv a1, s1
+    li a2, GPUQ_CHAINS
+    la a3, gpu_flush_command
+    call gpu_rect_batches
+    bnez a0, 7f
     j 8f
 7:
     li a0, 1
@@ -335,23 +323,64 @@ display_present_rects:
     addi sp, sp, 80
     ret
 
-# gpu_rect_commands: add the transfer and the flush of the rectangle at
-# a0, a1 of a2 by a3 to the pending batch, as two chains.
-gpu_rect_commands:
-    addi sp, sp, -48
-    sd ra, 40(sp)
-    sd a0, 32(sp)
-    sd a1, 24(sp)
-    sd a2, 16(sp)
-    sd a3, 8(sp)
-    call gpu_transfer_command
-    ld a0, 32(sp)
-    ld a1, 24(sp)
-    ld a2, 16(sp)
-    ld a3, 8(sp)
-    call gpu_flush_command
-    ld ra, 40(sp)
-    addi sp, sp, 48
+# gpu_rect_batches: for the a1 rectangles at a0, add one command each
+# with the routine at a3 (gpu_transfer_command or gpu_flush_command,
+# taking x, y, width, height in a0 to a3), in batches of a2 with one
+# wait each. Returns 0, or 1 when a command fails.
+gpu_rect_batches:
+    addi sp, sp, -64
+    sd ra, 56(sp)
+    sd s0, 48(sp)
+    sd s1, 40(sp)
+    sd s2, 32(sp)
+    sd s3, 24(sp)
+    sd s4, 16(sp)
+    sd s5, 8(sp)
+    mv s0, a0                   # the next rectangle
+    mv s1, a1                   # how many are left
+    mv s5, a2                   # a batch at most
+    mv s4, a3                   # the command
+1:
+    beqz s1, 8f
+    mv s2, s5
+    bgeu s1, s2, 2f
+    mv s2, s1                   # this batch
+2:
+    la t0, gpu_queue
+    sd zero, GPUQ_PENDING(t0)
+    li s3, 0                    # the rectangle in the batch
+3:
+    bgeu s3, s2, 4f
+    slli t0, s3, 4
+    add t0, t0, s0
+    lwu a0, JAB_RECT_X(t0)
+    lwu a1, JAB_RECT_Y(t0)
+    lwu a2, JAB_RECT_WIDTH(t0)
+    lwu a3, JAB_RECT_HEIGHT(t0)
+    jalr s4
+    addi s3, s3, 1
+    j 3b
+4:
+    call gpu_batch_run
+    bnez a0, 7f
+    slli t0, s2, 4
+    add s0, s0, t0
+    sub s1, s1, s2
+    j 1b
+7:
+    li a0, 1
+    j 9f
+8:
+    li a0, 0
+9:
+    ld ra, 56(sp)
+    ld s0, 48(sp)
+    ld s1, 40(sp)
+    ld s2, 32(sp)
+    ld s3, 24(sp)
+    ld s4, 16(sp)
+    ld s5, 8(sp)
+    addi sp, sp, 64
     ret
 
 # gpu_transfer_command: add the transfer to the host of the rectangle
