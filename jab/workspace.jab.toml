@@ -13,5 +13,6 @@ programs = [
   'test/romfs',
   'test/tar',
   'test/gz',
-  'test/checksum'
+  'test/checksum',
+  'test/hash'
 ]

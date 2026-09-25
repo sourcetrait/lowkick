@@ -1,0 +1,5 @@
+name = 'hash'
+sdk = '../../sdk'
+includes = ['../../sdk']
+link = '../../sdk/program.ld'
+display = 'none'

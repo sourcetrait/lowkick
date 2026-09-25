@@ -55,6 +55,7 @@
 .set JAB_SYS_GZ_SIZE, 20
 .set JAB_SYS_GZ_READ, 21
 .set JAB_SYS_CHECKSUM, 22
+.set JAB_SYS_HASH, 23
 
 # gzip, which is DEFLATE with a jacket: ten bytes of header, optionally
 # an extra field, a name and a comment, then the compressed bytes, then
@@ -387,6 +388,17 @@
     mv a1, \size
     mv a0, \address
     li a7, JAB_SYS_CHECKSUM
+    ecall
+.endm
+
+# jab.hash address, size: the XXH3-64 of those bytes, which is one
+# register wide and comes back in a0. Where jab.checksum answers whether
+# bytes are exactly the bytes expected, this answers which bytes they
+# are, quickly, for keying and lookups.
+.macro jab.hash address, size
+    mv a1, \size
+    mv a0, \address
+    li a7, JAB_SYS_HASH
     ecall
 .endm
 
