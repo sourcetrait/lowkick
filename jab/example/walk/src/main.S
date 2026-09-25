@@ -7,11 +7,12 @@
 # chosen for a new one is clear, no walker in the lane within a stride
 # of that edge, one enters, at once for an empty lane and otherwise
 # after a random wait, so the crowd staggers. A walker entering from
-# the right is the same frames mirrored. Each frame tick: every walker
-# is erased, moved, and its animation stepped, then every one is drawn
-# top lane to bottom so nearer walkers cover farther ones, and the
-# screen is flipped whole. Over the API, when a run has it, a record
-# per walker that enters and per walker that leaves, for the test.
+# the right is the same frames mirrored. The screen stays black, as
+# the framebuffer starts. Each frame tick: every walker is erased,
+# moved, and its animation stepped, then every one is drawn top lane
+# to bottom so nearer walkers cover farther ones, and the screen is
+# flipped whole. Over the API, when a run has it, a record per walker
+# that enters and per walker that leaves, for the test.
 .include "jab.inc"
 
 .set DISK, 1
@@ -35,7 +36,7 @@
 # the animation steps every so many display ticks, about sixteen a
 # second
 .set TICKS_PER_FRAME, 2
-.set BACKGROUND, 0x00404048
+.set BACKGROUND, 0x00000000
 # a walker's record
 .set W_X, 0                     # the left edge, in 256ths of a pixel
 .set W_DIR, 8                   # 1 walking right, -1 walking left
@@ -69,17 +70,6 @@ _start:
     bnez a0, bad_sprite
     jab.display.open
     bnez a0, no_display
-    # the pavement, two pixels a store, shown once whole
-    li t0, JAB_DISPLAY_BASE
-    li t1, JAB_DISPLAY_BASE + JAB_DISPLAY_SIZE
-    li t2, BACKGROUND
-    slli t3, t2, 32
-    or t2, t2, t3
-1:
-    sd t2, 0(t0)
-    addi t0, t0, 8
-    bltu t0, t1, 1b
-    jab.display.flip
     # the seed, never zero
     rdtime t0
     ori t0, t0, 1

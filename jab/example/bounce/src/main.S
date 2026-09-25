@@ -1,12 +1,12 @@
 # bounce: a ball bouncing around the display, Jab's display example.
-# Opens the display, paints the background once and flips it whole,
-# then each frame waits for the tick, erases the ball, moves it, draws
-# it, and flips the one rectangle holding where it was and where it
-# is. Runs until the window closes.
+# Opens the display, black as the framebuffer starts, then each frame
+# waits for the tick, erases the ball, moves it, draws it, and flips
+# the one rectangle holding where it was and where it is. Runs until
+# the window closes.
 .include "jab.inc"
 
 .set RADIUS, 90
-.set BACKGROUND, 0x00101018
+.set BACKGROUND, 0x00000000
 # LowKick's own colour, the logo's
 .set BALL, 0x008f00ff
 # Where the centre may go, keeping the whole ball on the screen
@@ -20,19 +20,6 @@
 _start:
     jab.display.open
     bnez a0, no_display
-    # the background over the whole framebuffer, two pixels a store
-    li t0, JAB_DISPLAY_BASE
-    li t1, JAB_DISPLAY_BASE + JAB_DISPLAY_SIZE
-    li t2, BACKGROUND
-    slli t3, t2, 32
-    or t2, t2, t3
-1:
-    sd t2, 0(t0)
-    addi t0, t0, 8
-    bltu t0, t1, 1b
-    # the whole screen once, since every flip after is the ball's
-    # rectangle alone
-    jab.display.flip
     # the ball's centre, and its speed in pixels per frame
     li s0, 200
     li s1, 200

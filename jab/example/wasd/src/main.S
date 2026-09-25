@@ -21,7 +21,7 @@
 .include "jab.inc"
 
 .set RADIUS, 90
-.set BACKGROUND, 0x00101018
+.set BACKGROUND, 0x00000000
 .set PLAYER, 0x00ff5533
 # LowKick's own colour, the logo's
 .set BALL, 0x008f00ff
@@ -74,19 +74,8 @@
 _start:
     jab.display.open
     bnez a0, no_display
-    # the background over the whole framebuffer, two pixels a store,
-    # shown whole once
-    li t0, JAB_DISPLAY_BASE
-    li t1, JAB_DISPLAY_BASE + JAB_DISPLAY_SIZE
-    li t2, BACKGROUND
-    slli t3, t2, 32
-    or t2, t2, t3
-1:
-    sd t2, 0(t0)
-    addi t0, t0, 8
-    bltu t0, t1, 1b
-    jab.display.flip
-    # your sphere at the centre, still
+    # your sphere at the centre, still, on the black the framebuffer
+    # starts with
     li t0, (JAB_DISPLAY_WIDTH / 2) * ONE
     la t1, player_x
     sd t0, 0(t1)
