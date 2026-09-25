@@ -24,13 +24,16 @@ target := if workspace_dir != "" { workspace_dir / ".target" } else { here / ".t
 out := target / "kernel"
 includes := shell('open "' + manifest + '" | get -o includes | default [] | each {|p| $"-I ($p)" } | str join " " | print -n $in')
 link_script := shell('open "' + manifest + '" | get link | print -n $in')
+# JAB_DEBUG=1 in the environment assembles the kernel with its own UART
+# lines (the banner, the exit status) switched on.
+debug_flags := if env("JAB_DEBUG", "") != "" { "--defsym JAB_DEBUG=1" } else { "" }
 
 default: build
 
 # Assemble every src/*.S and link them to <target>/kernel/jab.elf
 build:
     mkdir "{{out}}"
-    for f in (glob src/*.S) { ^"{{asm}}" {{includes}} $f -o ("{{out}}" | path join (($f | path parse | get stem) + ".o")) }
+    for f in (glob src/*.S) { ^"{{asm}}" {{includes}} {{debug_flags}} $f -o ("{{out}}" | path join (($f | path parse | get stem) + ".o")) }
     ^"{{link}}" -T {{link_script}} -nostdlib ...(glob "{{out}}/*.o") -o "{{out}}/jab.elf"
     ^"{{objdump}}" -d "{{out}}/jab.elf" | save -f "{{out}}/jab.disas"
 

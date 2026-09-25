@@ -6,6 +6,6 @@ use std/assert
 def main [--kernel: path, --image: path, --out: path] {
     let run = (jab launch --kernel $kernel --image $image --out $out)
     assert equal $run.status 3 "exit status"
-    assert ($run.serial | str contains "jab: exit 3") "the exit reported"
+    assert equal $run.serial "exiting with 3\n" "the program's line and nothing else"
     print "exitstatus: ok"
 }

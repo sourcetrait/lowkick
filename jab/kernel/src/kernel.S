@@ -4,7 +4,9 @@
 
 # Supervisor-mode entry. Zeroes bss, turns on paging, installs the trap
 # vector, and enters the program at JAB_PROGRAM_BASE in user mode with
-# its stack at JAB_STACK_TOP and every other register cleared.
+# its stack at JAB_STACK_TOP and every other register cleared. The UART
+# carries only the program's output unless JAB_DEBUG is defined at
+# assembly (as --defsym JAB_DEBUG=1), which adds the kernel's own lines.
 .section .text
 .global kmain
 kmain:
@@ -23,8 +25,10 @@ kmain:
     li t0, SSTATUS_SUM
     csrs sstatus, t0
     csrw sie, zero
+.ifdef JAB_DEBUG
     la a0, msg_banner
     call uart_puts
+.endif
     # sscratch holds the kernel stack top while the program runs.
     la t0, kernel_stack_top
     csrw sscratch, t0

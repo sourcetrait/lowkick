@@ -93,9 +93,10 @@ bad_address:
     li a0, 1
     j qemu_exit
 
-# jab.exit: a0 is the status. Reported on the UART, then QEMU ends with
-# it, since no launcher exists yet to return to.
+# jab.exit: a0 is the status. QEMU ends with it, since no launcher
+# exists yet to return to; with JAB_DEBUG the status is also reported.
 sys_exit:
+.ifdef JAB_DEBUG
     mv s0, a0
     la a0, msg_exit
     call uart_puts
@@ -104,6 +105,7 @@ sys_exit:
     li a0, '\n'
     call uart_putc
     mv a0, s0
+.endif
     j qemu_exit
 
 program_fault:
