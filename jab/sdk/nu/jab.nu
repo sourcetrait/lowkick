@@ -68,9 +68,11 @@ def cpu-model []: nothing -> string {
 def machine-args []: nothing -> list<string> {
     ["-machine" "virt" "-cpu" (cpu-model)] ++ $machine_rest
 }
-# The process is named, and so are its threads (CPU 0/TCG and the
-# rest), so a per-thread listing reads.
-const name = ["-name" "jab,debug-threads=on"]
+# The guest and the process are both named jab - `-name jab` alone
+# names only the guest - and so are the threads (CPU 0/TCG and the
+# rest), so `pgrep -x jab` finds the process and a per-thread listing
+# reads.
+const name = ["-name" "jab,process=jab,debug-threads=on"]
 const display_device = ["-device" "virtio-gpu-device,xres=1920,yres=1080"]
 const input_devices = [
     "-device" "virtio-keyboard-device"
