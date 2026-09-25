@@ -1,71 +1,29 @@
-# A Jab program. Builds src/main.S into <target>/<category>/<name>/<name>.jab,
-# runs it on the kernel at <target>/kernel/jab.elf, and tests it with
-# test/test.nu.
-#
-# Lookups, in order: the workspace is the nearest parent directory
-# holding workspace.jab.toml, if any; the toolchain is RISCV_TOOLCHAIN,
-# else extern/riscv here, else the workspace's extern/riscv, else the
-# tools on PATH; the target is the workspace's .target, else .target
-# here; the name, include paths, link script, and display come from
-# program.jab.toml. Paths must not contain spaces.
+# A Jab program. Every recipe hands off to the SDK's nushell tool, found
+# through the manifest's `sdk`, which reads program.jab.toml and does the
+# lookups (workspace, toolchain, target, kernel, display) and the
+# up-to-date check. Standalone, with no workspace above, JAB_KERNEL names
+# the kernel ELF to run on.
 
 set shell := ["nu", "-c"]
 set windows-shell := ["nu", "-c"]
 set quiet := true
 
 here := justfile_directory()
-manifest := here / "program.jab.toml"
-triple := "riscv64-unknown-linux-gnu-"
-
-workspace_dir := shell('mut d = "' + here + '"; mut found = ""; loop { if ($d | path join "workspace.jab.toml" | path exists) { $found = $d; break }; let p = ($d | path dirname); if $p == $d { break }; $d = $p }; print -n $found')
-riscv_toolchain := if env("RISCV_TOOLCHAIN", "") != "" { env("RISCV_TOOLCHAIN") } else { if path_exists(here / "extern" / "riscv") == "true" { here / "extern" / "riscv" } else { if workspace_dir != "" { if path_exists(workspace_dir / "extern" / "riscv") == "true" { workspace_dir / "extern" / "riscv" } else { "" } } else { "" } } }
-riscv_tool := if riscv_toolchain != "" { riscv_toolchain / "bin" / triple } else { triple }
-asm := riscv_tool + "as"
-link := riscv_tool + "ld"
-objcopy := riscv_tool + "objcopy"
-target := if workspace_dir != "" { workspace_dir / ".target" } else { here / ".target" }
-name := shell('open "' + manifest + '" | get name | print -n $in')
-includes := shell('open "' + manifest + '" | get -o includes | default [] | each {|p| $"-I ($p)" } | str join " " | print -n $in')
-link_script := shell('open "' + manifest + '" | get link | print -n $in')
-relative := shell('let w = "' + workspace_dir + '"; if $w == "" { print -n "' + name + '" } else { "' + here + '" | path relative-to $w | print -n $in }')
-out := target / relative
-image := out / name + ".jab"
-kernel_elf := target / "kernel" / "jab.elf"
-
-qemu := "qemu-system-riscv64"
-program_base := "0x80800000"
-# The console window, in order: JAB_DISPLAY if set (any -display value);
-# else the manifest's `display` (a program with no use for a window says
-# 'none'); else QEMU's native window when a display server is present,
-# else a VNC server on 127.0.0.1:5930 to tunnel and view.
-manifest_display := shell('open "' + manifest + '" | get -o display | default "" | print -n $in')
-display := if env("JAB_DISPLAY", "") != "" { env("JAB_DISPLAY") } else { if manifest_display != "" { manifest_display } else { if env("DISPLAY", "") != "" { "default" } else { if env("WAYLAND_DISPLAY", "") != "" { "default" } else { "vnc=127.0.0.1:30" } } } }
-machine := "-machine virt -cpu rv64 -accel tcg -smp 4 -global virtio-mmio.force-legacy=false"
-devices := "-device virtio-gpu-device,xres=1920,yres=1080 -device virtio-keyboard-device -device virtio-tablet-device -device virtio-net-device,netdev=net0 -netdev user,id=net0 -device virtio-sound-device,audiodev=snd0 -audiodev none,id=snd0 -device virtio-rng-device"
 
 default: build
 
-# Assemble and link src/main.S, then flatten it to <name>.jab
+# Assemble and link src/main.S to <target>/<path>/<name>.jab when stale
 build:
-    mkdir "{{out}}"
-    ^"{{asm}}" {{includes}} src/main.S -o "{{out}}/{{name}}.o"
-    ^"{{link}}" -T {{link_script}} -nostdlib "{{out}}/{{name}}.o" -o "{{out}}/{{name}}.elf"
-    ^"{{objcopy}}" -O binary "{{out}}/{{name}}.elf" "{{image}}"
+    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") build "{{here}}"
 
-# Build, then run test/test.nu, which launches the program on the kernel
-# and judges the run; the kernel must be built first
-test: build
-    if not ("{{kernel_elf}}" | path exists) { error make {msg: "no kernel at {{kernel_elf}}; build the kernel first"} }
-    if not ("test/test.nu" | path exists) { error make {msg: "{{name}} has no test/test.nu"} }
-    ^nu test/test.nu --kernel "{{kernel_elf}}" --image "{{image}}" --out "{{out}}"
+# Build, then run test/test.nu on the kernel
+test:
+    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") test "{{here}}"
 
-# Run with the console window and the full virtio device set, the UART
-# on stdio; without a display server the window is a VNC server
-run: build
-    if not ("{{kernel_elf}}" | path exists) { error make {msg: "no kernel at {{kernel_elf}}; build the kernel first"} }
-    if not ("{{target}}/disk.img" | path exists) { ^truncate -s 64M "{{target}}/disk.img" }
-    if ("{{display}}" | str starts-with "vnc=") { print "no display server here: the console is a VNC server on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`" }
-    ^{{qemu}} {{machine}} -m 4G {{devices}} -drive if=none,id=disk0,file={{target}}/disk.img,format=raw -device virtio-blk-device,drive=disk0 -bios none -kernel {{kernel_elf}} -device loader,file={{image}},addr={{program_base}},force-raw=on -display {{display}} -serial stdio -monitor none
+# Build, then run on the kernel with the console window, the UART on
+# stdio; the exit code is the program's status
+run:
+    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") run "{{here}}"
 
 clean:
-    rm -rf "{{out}}"
+    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") clean "{{here}}"

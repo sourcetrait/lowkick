@@ -1,34 +1,33 @@
-# LowKick Jab workspace: calls the kernel's and each program's justfile
-# in turn, the list coming from workspace.jab.toml. Needs nushell, just,
-# a riscv64 GNU toolchain, and qemu-system-riscv64; see kernel/justfile
-# for how the toolchain and the target directory are found.
+# LowKick Jab workspace. Every recipe hands off to the SDK's nushell tool,
+# sdk/nu/jab.nu, which reads workspace.jab.toml and does all lookups and
+# up-to-date checks in one process. Needs nushell, just, a riscv64 GNU
+# toolchain, and qemu-system-riscv64; see the tool for how the toolchain
+# and the target directory are found.
 
 set shell := ["nu", "-c"]
 set windows-shell := ["nu", "-c"]
 set quiet := true
 
 here := justfile_directory()
-manifest := here / "workspace.jab.toml"
-kernel_dir := shell('open "' + manifest + '" | get kernel | print -n $in')
-programs := shell('open "' + manifest + '" | get programs | str join " " | print -n $in')
+jab := here / "sdk" / "nu" / "jab.nu"
 
 default: build
 
-# Build the kernel, then every program
+# Build the kernel, then every program, skipping what is up to date
 build:
-    ^just -f "{{here}}/{{kernel_dir}}/justfile" build
-    for p in ("{{programs}}" | split row " ") { ^just -f ("{{here}}" | path join $p "justfile") build }
+    ^nu "{{jab}}" workspace build "{{here}}"
 
 # Build everything, then run the integration test of every program, of
 # one category (`just test example`), or of one program
 # (`just test example helloworld`); prints each test's output and a
 # summary, fails if any fails
-test category="" name="": build
-    let sel = ("{{programs}}" | split row " " | where {|p| ("{{category}}" == "" or ($p | str starts-with "{{category}}/")) and ("{{name}}" == "" or ($p | path basename) == "{{name}}") }); if ($sel | is-empty) { error make {msg: "no program matches {{category}} {{name}}"} }; let results = ($sel | each {|p| let r = (^just -f ("{{here}}" | path join $p "justfile") test | complete); print $"--- ($p)"; print -n $r.stdout; if $r.exit_code != 0 { print -n $r.stderr }; { program: $p, passed: ($r.exit_code == 0) } }); print ($results | table); exit (if ($results | all {|r| $r.passed }) { 0 } else { 1 })
+test category="" name="":
+    ^nu "{{jab}}" workspace test "{{here}}" "{{category}}" "{{name}}"
 
-# Run one program with the console window: `just run example helloworld`
-run category name: build
-    ^just -f ("{{here}}" | path join "{{category}}" "{{name}}" "justfile") run
+# Build everything, then run one program with the console window:
+# `just run example helloworld`
+run category name:
+    ^nu "{{jab}}" workspace run "{{here}}" "{{category}}" "{{name}}"
 
 clean:
     rm -rf "{{here}}/.target"

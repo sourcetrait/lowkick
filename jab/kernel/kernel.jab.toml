@@ -1,3 +1,4 @@
 name = 'jab'
+sdk = '../sdk'
 includes = ['src/include', '../sdk']
 link = 'src/link.ld'
