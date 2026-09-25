@@ -1,9 +1,16 @@
 # Jab system calls: the table of record. The number goes in a7, each
-# argument in the register named, then `ecall`. `kind` is how the SDK
-# macro takes the argument: immediate (a constant, checked where a range
-# exists) or address (a label). sdk/jab.inc carries the same numbers.
+# argument in the register named, then `ecall`; the result comes back in
+# a0. `kind` is how the SDK macro takes the argument: immediate (a
+# constant, checked where a range exists) or address (a label).
+# sdk/jab.inc carries the same numbers.
 [
     [name, number, args, summary];
     [jab.exit, 1, [{name: status, kind: immediate, reg: a0}], "End the program with a status; QEMU exits with it until a launcher exists"],
-    [jab.print, 2, [{name: message, kind: address, reg: a0}], "Write a NUL-terminated string inside the program's window to the UART"]
+    [jab.print, 2, [{name: message, kind: address, reg: a0}], "Write a NUL-terminated string inside the program's window to the screen console once the display is open, else to the UART"],
+    [jab.uart.print, 3, [{name: message, kind: address, reg: a0}], "Write a NUL-terminated string inside the program's window to the UART"],
+    [jab.display.open, 4, [], "Bring the display up and show the framebuffer; 0, or 1 with no virtio-gpu, 2 when the device refuses the kernel, 3 when a command fails"],
+    [jab.display.ready, 5, [], "1 when a flip would go through now, 0 while the cap holds it back"],
+    [jab.display.flip, 6, [], "Show the framebuffer without waiting; 0, or 1 when early under the cap (nothing shown), 2 when not open, 3 when the device refused"],
+    [jab.display.print, 7, [{name: message, kind: address, reg: a0}], "Write a NUL-terminated string inside the program's window to the screen console, opening the display if needed; 0, or jab.display.open's code"],
+    [jab.await, 8, [{name: mask, kind: immediate, reg: a0}], "Halt until an event in the mask, 0 for any; the display's frame tick (1) is the only event so far; the events that fired"]
 ]

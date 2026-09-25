@@ -17,3 +17,8 @@ build:
 
 clean:
     let sdk = (open kernel.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") clean --kernel "{{here}}"
+
+# Regenerate src/font.S, the console font, from a Spleen 12x24 BDF:
+# `just font <spleen-12x24.bdf>`
+font bdf:
+    ^nu font/spleen.nu "{{bdf}}" src/font.S

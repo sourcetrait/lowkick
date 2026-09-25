@@ -1,7 +1,10 @@
-version = '0.0.0-1'
+version = '0.0.0-2'
 kernel = 'kernel'
 programs = [
   'example/helloworld',
+  'example/bounce',
   'test/exitstatus',
-  'test/badstore'
+  'test/badstore',
+  'test/displayprint',
+  'test/framecap'
 ]

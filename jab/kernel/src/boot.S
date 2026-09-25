@@ -2,8 +2,9 @@
 .include "qemu_virt.inc"
 
 # Machine-mode entry. QEMU starts every hart here, at the start of RAM,
-# with -bios none -kernel. Hart 0 opens memory, delegates traps, and
-# drops to supervisor mode in kmain; every other hart parks.
+# with -bios none -kernel. Hart 0 opens memory, delegates traps, hands
+# the timer to supervisor mode, and drops to supervisor mode in kmain;
+# every other hart parks.
 .section .text.boot
 .global _start
 _start:
@@ -23,6 +24,11 @@ _start:
     li t0, MIDELEG_S_ALL
     csrw mideleg, t0
     csrw mie, zero
+    # The supervisor timer: stimecmp (Sstc), with time readable there.
+    li t0, MENVCFG_STCE
+    csrs menvcfg, t0
+    li t0, MCOUNTEREN_CY_TM_IR
+    csrw mcounteren, t0
     # mret into kmain as supervisor.
     csrr t0, mstatus
     li t1, MSTATUS_MPP_MASK

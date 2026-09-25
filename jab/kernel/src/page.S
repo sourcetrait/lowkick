@@ -4,9 +4,10 @@
 
 # Sv39 with 2 MiB pages, one table per level, built once and never
 # changed: the first 2 MiB (QEMU's test device) and the 2 MiB at the
-# UART for the kernel, the kernel's own 2 MiB at the start of RAM, and
-# the program's 2 MiB window for user mode. Everything is mapped at its
-# physical address.
+# UART for the kernel, the kernel's own 2 MiB at the start of RAM, the
+# program's 2 MiB window for user mode, and the framebuffer's pages
+# after the window, user read-write. Everything is mapped at its
+# physical address; the virtio transports sit in the UART's page.
 
 # For each address: the PTE (without flags) of the 2 MiB page holding
 # it, the page's aligned base as a PPN shifted into place, and the byte
@@ -19,6 +20,12 @@
 .set KERNEL_SLOT, (((QEMU_VIRT_DRAM >> 21) & 0x1ff) * 8)
 .set PROGRAM_PTE, ((((JAB_PROGRAM_BASE >> 21) << 21) >> 12) << 10)
 .set PROGRAM_SLOT, (((JAB_PROGRAM_BASE >> 21) & 0x1ff) * 8)
+.set DISPLAY_PTE, ((((JAB_DISPLAY_BASE >> 21) << 21) >> 12) << 10)
+.set DISPLAY_SLOT, (((JAB_DISPLAY_BASE >> 21) & 0x1ff) * 8)
+# The framebuffer takes this many 2 MiB pages; one page on is this much
+# more PTE.
+.set DISPLAY_PAGES, ((JAB_DISPLAY_SIZE + 0x1fffff) >> 21)
+.set PAGE_PTE_STEP, ((0x200000 >> 12) << 10)
 
 .section .text
 .global page_init
@@ -47,6 +54,17 @@ page_init:
     sd t1, KERNEL_SLOT(t0)
     li t1, PROGRAM_PTE | PTE_USER_RWX
     sd t1, PROGRAM_SLOT(t0)
+    # the framebuffer's pages, user read-write, after the window
+    addi t0, t0, DISPLAY_SLOT
+    li t1, DISPLAY_PTE | PTE_USER_RW
+    li t2, DISPLAY_PAGES
+    li t3, PAGE_PTE_STEP
+1:
+    sd t1, 0(t0)
+    add t1, t1, t3
+    addi t0, t0, 8
+    addi t2, t2, -1
+    bnez t2, 1b
     # satp: Sv39 with the root table
     la t0, page_root
     srli t0, t0, 12

@@ -9,6 +9,15 @@
 .set SSTATUS_SPP, (1 << 8)
 .set SSTATUS_SUM, (1 << 18)
 
+# sie: the supervisor timer interrupt
+.set SIE_STIE, (1 << 5)
+
+# menvcfg: stimecmp (Sstc) usable in supervisor mode
+.set MENVCFG_STCE, (1 << 63)
+
+# mcounteren: cycle, time, and instret readable below machine mode
+.set MCOUNTEREN_CY_TM_IR, 0x7
+
 # One PMP entry, NAPOT, read, write, execute
 .set PMP_NAPOT_RWX, 0x1f
 
@@ -31,4 +40,5 @@
 .set PTE_TABLE, PTE_V
 .set PTE_KERNEL_RW, (PTE_V | PTE_R | PTE_W | PTE_A | PTE_D)
 .set PTE_KERNEL_RWX, (PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D)
+.set PTE_USER_RW, (PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D)
 .set PTE_USER_RWX, (PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D)

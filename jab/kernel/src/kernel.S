@@ -2,11 +2,13 @@
 .include "qemu_virt.inc"
 .include "jab.inc"
 
-# Supervisor-mode entry. Zeroes bss, turns on paging, installs the trap
-# vector, and enters the program at JAB_PROGRAM_BASE in user mode with
-# its stack at JAB_STACK_TOP and every other register cleared. The UART
-# carries only the program's output unless JAB_DEBUG is defined at
-# assembly (as --defsym JAB_DEBUG=1), which adds the kernel's own lines.
+# Supervisor-mode entry. Zeroes bss, turns on paging, starts the frame
+# clock, installs the trap vector, and enters the program at
+# JAB_PROGRAM_BASE in user mode with its stack at JAB_STACK_TOP and
+# every other register cleared. The display comes up when the program
+# asks for it. The UART carries only the program's output unless
+# JAB_DEBUG is defined at assembly (as --defsym JAB_DEBUG=1), which adds
+# the kernel's own lines.
 .section .text
 .global kmain
 kmain:
@@ -19,9 +21,11 @@ kmain:
     j 1b
 2:
     call page_init
+    call frame_clock_init
     la t0, trap_vector
     csrw stvec, t0
-    # The kernel reads program memory (a message to print), so SUM.
+    # The kernel reads and writes program memory (a message to print,
+    # the framebuffer), so SUM.
     li t0, SSTATUS_SUM
     csrs sstatus, t0
     csrw sie, zero

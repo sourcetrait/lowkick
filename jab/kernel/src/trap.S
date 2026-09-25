@@ -7,7 +7,11 @@
 # a handler, and sret returns with the frame restored. sscratch holds the
 # kernel stack top while the program runs and the program's sp while the
 # kernel runs, swapped on entry and exit. Frame slot n holds register n;
-# slot 2 holds the program's sp.
+# slot 2 holds the program's sp. A system call is dispatched through
+# syscall_table by its number in a7; a handler finds the argument in
+# slot 80 (a0), leaves its result there, and jumps to trap_return.
+.set SYSCALL_LAST, JAB_SYS_AWAIT
+
 .section .text
 .balign 4
 .global trap_vector
@@ -55,10 +59,16 @@ trap_vector:
     # A system call: the number in a7, the argument in a0.
     ld a7, 136(sp)
     ld a0, 80(sp)
-    li t0, JAB_SYS_EXIT
-    beq a7, t0, sys_exit
-    li t0, JAB_SYS_PRINT
-    beq a7, t0, sys_print
+    beqz a7, bad_syscall
+    li t0, SYSCALL_LAST
+    bgtu a7, t0, bad_syscall
+    la t0, syscall_table
+    slli t1, a7, 3
+    add t0, t0, t1
+    ld t0, 0(t0)
+    jr t0
+
+bad_syscall:
     la a0, msg_bad_syscall
     call uart_puts
     ld a0, 136(sp)
@@ -68,14 +78,25 @@ trap_vector:
     li a0, 1
     j qemu_exit
 
-# jab.print: a0 is the message, which must lie inside the program's
-# window; the write stops at the terminator or the window's end.
-sys_print:
-    li s1, JAB_PROGRAM_BASE
-    bltu a0, s1, bad_address
-    li s1, JAB_STACK_TOP
-    bgeu a0, s1, bad_address
+# message_bounds: a0 is a message address from the program. Returns a0
+# unchanged and a1 as the window's end, or ends the run when the address
+# lies outside the window.
+.global message_bounds
+message_bounds:
+    li t0, JAB_PROGRAM_BASE
+    bltu a0, t0, bad_address
+    li a1, JAB_STACK_TOP
+    bgeu a0, a1, bad_address
+    ret
+
+# sys_uart_print (jab.uart.print): a0 is the message, which must lie
+# inside the program's window; the write stops at the terminator or the
+# window's end. a0 becomes 0.
+.global sys_uart_print
+sys_uart_print:
+    call message_bounds
     mv s0, a0
+    mv s1, a1
 1:
     bgeu s0, s1, 2f
     lbu a0, 0(s0)
@@ -93,8 +114,9 @@ bad_address:
     li a0, 1
     j qemu_exit
 
-# jab.exit: a0 is the status. QEMU ends with it, since no launcher
-# exists yet to return to; with JAB_DEBUG the status is also reported.
+# sys_exit (jab.exit): a0 is the status. QEMU ends with it, since no
+# launcher exists yet to return to; with JAB_DEBUG the status is also
+# reported.
 sys_exit:
 .ifdef JAB_DEBUG
     mv s0, a0
@@ -139,6 +161,7 @@ kernel_fault:
     call uart_putc
     j halt
 
+.global trap_return
 trap_return:
     csrr t0, sepc
     addi t0, t0, 4
@@ -197,6 +220,17 @@ halt:
     j halt
 
 .section .rodata
+.balign 8
+syscall_table:
+    .quad bad_syscall
+    .quad sys_exit
+    .quad sys_print
+    .quad sys_uart_print
+    .quad sys_display_open
+    .quad sys_display_ready
+    .quad sys_display_flip
+    .quad sys_display_print
+    .quad sys_await
 msg_exit:
     .asciz "jab: exit "
 msg_bad_syscall:
