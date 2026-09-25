@@ -36,10 +36,16 @@ test category="" name="" *args:
 run category name *args:
     ^nu "{{jab}}" workspace run "{{here}}" "{{category}}" "{{name}}" {{args}}
 
-# Watch the running Jab QEMU in this host's own top, per thread where
-# the host can: `just watch` from any shell while a program runs
+# Record the running Jab QEMU per thread, once a second, to
+# .target/watch.nuonl: `just watch` from any shell while a program
+# runs, until the run ends
 watch:
-    ^nu "{{jab}}" watch
+    ^nu "{{jab}}" watch "{{here}}"
+
+# Report on the last recording as one NUON record to paste: per thread
+# the steady CPU seconds a second after the first five, or `--skip N`
+watched *args:
+    ^nu "{{jab}}" watched "{{here}}" {{args}}
 
 clean:
     rm -rf "{{here}}/.target"

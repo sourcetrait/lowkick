@@ -394,36 +394,135 @@ def wait-for-file [path: path]: nothing -> nothing {
 }
 
 # The Jab QEMU processes on this host, by their command line, which
-# every Jab line marks with `-name jab`.
+# every Jab line marks with `-name jab`: the QEMU itself, never the
+# `timeout` a test wraps it in, whose command line carries the same
+# words.
 def jab-pids []: nothing -> list<int> {
-    ps -l | where {|p| ($p.command | str contains "qemu-system-riscv64") and ($p.command | str contains "-name jab") } | get pid
+    ps -l | where {|p| (($p.command | split row " " | first | path basename) == "qemu-system-riscv64") and ($p.command | str contains "-name jab") } | get pid
 }
 
-# Watch the running Jab QEMU per thread, whatever shell this is run
-# from: on Linux in the host's own top, where the harts (`CPU 0/TCG`
-# and on) and the main loop (under the process name, where the host's
-# copy and paint land) show by name, ending when top does; on macOS,
-# whose top has no thread view, `ps -M` of the process every second,
-# the first row the AppKit thread that draws the window, QEMU's own
-# loop and the harts below it unnamed, until the run ends or the watch
-# is interrupted.
-def "main watch" [] {
+# The threads of a process with their cumulative CPU seconds: on Linux
+# from /proc, by thread id and name (the harts `CPU 0/TCG` and on, the
+# main loop under the process name); on macOS from `ps -M`, its rows
+# in order, the first the AppKit thread that draws the window, the
+# rest unnamed, so a thread is identified by its row.
+def threads-of [pid: int]: nothing -> table<id: string, name: string, cpu: float> {
+    match $nu.os-info.name {
+        "linux" => {
+            let tasks = (try { ls ("/proc" | path join ($pid | into string) "task") | get name } catch { [] })
+            $tasks | each {|t|
+                let stat = (try { open --raw ($t | path join "stat") | decode } catch { "" })
+                if $stat == "" { null } else {
+                    let fields = ($stat | split row ") " | last | split row " ")
+                    let name = (try { open --raw ($t | path join "comm") | decode | str trim } catch { "" })
+                    { id: ($t | path basename), name: $name, cpu: ((($fields | get 11 | into int) + ($fields | get 12 | into int)) / 100.0) }
+                }
+            } | compact
+        },
+        "macos" => {
+            let out = (^ps -M -p ($pid | into string) | complete | get stdout)
+            $out | lines | skip 1 | enumerate | each {|row|
+                let times = ($row.item | parse --regex '(?P<stime>\d+:\d+(?::\d+)?\.\d+)\s+(?P<utime>\d+:\d+(?::\d+)?\.\d+)' | get -o 0)
+                if $times == null { null } else {
+                    { id: ($row.index | into string), name: (if $row.index == 0 { "main" } else { $"thread ($row.index)" }), cpu: ((clock-seconds $times.stime) + (clock-seconds $times.utime)) }
+                }
+            } | compact
+        },
+        _ => { error make {msg: $"no thread reading here for ($nu.os-info.name)"} },
+    }
+}
+
+# `ps` clock text, M:SS.hh or H:MM:SS.hh, as seconds.
+def clock-seconds [text: string]: nothing -> float {
+    $text | split row ":" | each {|p| $p | into float } | reduce --fold 0.0 {|it, acc| $acc * 60.0 + $it }
+}
+
+# Where `watch` records: watch.nuonl under the workspace's .target.
+def watch-file [ws: path]: nothing -> string {
+    $ws | path expand | path join ".target" "watch.nuonl"
+}
+
+# Record the running Jab QEMU per thread, once a second, to the
+# workspace's .target/watch.nuonl, whatever shell this is run from: a
+# first line describing the run (host, QEMU, the window, the kernel and
+# the symbols it was built with, read from its tree's flags stamp),
+# then a line per sample with every thread's cumulative CPU seconds.
+# One short line is printed per sample, the rates since the last; the
+# file is what `watched` reports on. Ends when the run does, or when
+# interrupted.
+def "main watch" [ws: path] {
     let pids = (jab-pids)
     if ($pids | is-empty) { error make {msg: "no jab is running"} }
-    let list = ($pids | each {|p| $p | into string } | str join ",")
-    match $nu.os-info.name {
-        "linux" => { ^top -H -p $list },
-        "macos" => {
-            loop {
-                let alive = (jab-pids)
-                if ($alive | is-empty) { print "jab: the run has ended"; break }
-                let threads = ($alive | each {|p| ^ps -M -p ($p | into string) | complete | get stdout } | str join (char nl))
-                print $"(ansi cls)(date now | format date '%H:%M:%S')  jab ($alive | each {|p| $p | into string } | str join ', ')(char nl)($threads)"
-                sleep 1sec
-            }
-        },
-        _ => { error make {msg: $"no top here for ($nu.os-info.name); the jab processes are ($list)"} },
+    let pid = ($pids | first)
+    let command = (ps -l | where pid == $pid | get -o 0.command | default "")
+    let window = ($command | parse --regex '-display (?P<w>\S+)' | get -o 0.w | default "")
+    let kernel = ($command | parse --regex '-kernel (?P<k>\S+)' | get -o 0.k | default "")
+    let stamp_file = (if $kernel == "" { "" } else { $kernel | path dirname | path join "flags" })
+    let stamp = (if $stamp_file != "" and ($stamp_file | path exists) { open --raw $stamp_file | decode | str trim } else { "" })
+    let symbols = ($stamp | parse --regex '--defsym (?P<s>[A-Z0-9_]+)=1' | get s)
+    let qemu = (^qemu-system-riscv64 --version | complete | get stdout | lines | get -o 0 | default "")
+    let file = (watch-file $ws)
+    mkdir ($file | path dirname)
+    let started = (date now)
+    let run = { os: $nu.os-info.name, arch: $nu.os-info.arch, qemu: $qemu, window: $window, kernel: $kernel, symbols: $symbols, pid: $pid, started: ($started | format date "%Y-%m-%dT%H:%M:%S") }
+    ({ run: $run } | to nuon) + (char nl) | save --raw -f $file
+    print $"jab watch: recording ($pid) to ($file), ($symbols | str join ', ') under ($window)"
+    if ($pids | length) > 1 { print $"jab watch: ($pids | length) jab processes; recording the first" }
+    mut last: any = null
+    loop {
+        if (jab-pids | where {|p| $p == $pid } | is-empty) { print "jab watch: the run has ended"; break }
+        let at = (((date now) - $started) / 1sec)
+        let threads = (threads-of $pid)
+        ({ at: $at, threads: $threads } | to nuon) + (char nl) | save --raw --append $file
+        let previous = $last
+        if $previous != null {
+            let seconds = ($at - $previous.at)
+            let rates = ($threads | each {|t|
+                let before = ($previous.threads | where id == $t.id | get -o 0.cpu | default $t.cpu)
+                { name: $t.name, rate: (($t.cpu - $before) / $seconds) }
+            } | where rate >= 0.01 | sort-by rate --reverse)
+            print $"($at | math round)s  ($rates | each {|r| $'($r.name) ($r.rate | math round -p 2)' } | str join '  ')"
+        }
+        $last = { at: $at, threads: $threads }
+        sleep 1sec
     }
+}
+
+# Report on what `watch` recorded, as one NUON record to paste: the run
+# as recorded, the stretch reported on (the first `--skip` seconds
+# dropped as the load), and per thread the steady CPU seconds a second
+# over that stretch and the peak second, with the process total;
+# threads under 0.005 a second are left out.
+def "main watched" [ws: path, --skip: float = 5.0] {
+    let file = (watch-file $ws)
+    if not ($file | path exists) { error make {msg: $"nothing recorded at ($file); run `just watch` during a run first"} }
+    let lines = (open --raw $file | decode | lines | where {|l| ($l | str trim) != "" })
+    let header = ($lines | first | from nuon)
+    let samples = ($lines | skip 1 | each {|l| $l | from nuon } | where at >= $skip)
+    if ($samples | length) < 2 { error make {msg: $"only ($samples | length) samples after the first ($skip) seconds; watch longer or lower --skip"} }
+    let first = ($samples | first)
+    let last = ($samples | last)
+    let seconds = ($last.at - $first.at)
+    let threads = ($last.threads | get id | each {|id|
+        let series = ($samples | each {|s|
+            let t = ($s.threads | where id == $id | get -o 0)
+            if $t == null { null } else { { at: $s.at, cpu: $t.cpu, name: $t.name } }
+        } | compact)
+        if ($series | length) < 2 { null } else {
+            let steady = ((($series | last).cpu - ($series | first).cpu) / (($series | last).at - ($series | first).at))
+            let peak = ($series | window 2 | each {|w| ($w.1.cpu - $w.0.cpu) / ($w.1.at - $w.0.at) } | math max)
+            { name: ($series | last).name, id: $id, steady: ($steady | math round -p 3), peak: ($peak | math round -p 3) }
+        }
+    } | compact | where steady >= 0.005 | sort-by steady --reverse)
+    let report = {
+        run: $header.run,
+        skipped: $skip,
+        seconds: ($seconds | math round -p 1),
+        samples: ($samples | length),
+        process: (if ($threads | is-empty) { 0.0 } else { $threads | get steady | math sum | math round -p 3 }),
+        threads: $threads,
+    }
+    print ($report | to nuon --indent 2)
 }
 
 # The nearest parent of `dir` holding workspace.jab.toml, or null.
