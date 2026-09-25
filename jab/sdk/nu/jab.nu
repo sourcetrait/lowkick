@@ -68,11 +68,16 @@ def cpu-model []: nothing -> string {
 def machine-args []: nothing -> list<string> {
     ["-machine" "virt" "-cpu" (cpu-model)] ++ $machine_rest
 }
-# The guest and the process are both named jab - `-name jab` alone
-# names only the guest - and so are the threads (CPU 0/TCG and the
-# rest), so `pgrep -x jab` finds the process and a per-thread listing
-# reads.
-const name = ["-name" "jab,process=jab,debug-threads=on"]
+# The guest is named jab and so are the threads (CPU 0/TCG and the
+# rest), so a per-thread listing reads; on Linux the process is named
+# jab too, so `pgrep -x jab` finds it. `-name jab` alone names only the
+# guest, and `process=` is a Linux prctl that QEMU refuses to start
+# without elsewhere ("Change of process name not supported by your
+# OS"), so the process name is Linux's alone.
+def name-args []: nothing -> list<string> {
+    let process = (if $nu.os-info.name == "linux" { ",process=jab" } else { "" })
+    ["-name" $"jab($process),debug-threads=on"]
+}
 const display_device = ["-device" "virtio-gpu-device,xres=1920,yres=1080"]
 const input_devices = [
     "-device" "virtio-keyboard-device"
@@ -125,7 +130,7 @@ export def launch [
     let ports = (ports (symbols $set) $out ($api or (not ($send | is-empty))))
     let args = ([
         "--signal=TERM" $"($seconds)" "qemu-system-riscv64"
-    ] ++ (machine-args) ++ $name ++ $memory ++ $display_device ++ $input_devices ++ $ports.args ++ [
+    ] ++ (machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $input_devices ++ $ports.args ++ [
         "-bios" "none" "-kernel" ($kernel | path expand)
         "-device" $"loader,file=($image | path expand),addr=($program_base),force-raw=on"
         "-display" "none" "-monitor" $"pipe:($monitor)" "-serial" $"file:($log)"
@@ -604,7 +609,7 @@ def run-program [dir: path, names: list<string>, api: bool]: nothing -> nothing 
     # the ports' files sit beside the build output, named in the README;
     # a run says nothing of its own
     let ports = (ports $c.symbols $c.out $api)
-    let args = ((machine-args) ++ $name ++ $memory ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ $ports.args ++ [
+    let args = ((machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ $ports.args ++ [
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"
         "-display" $window "-serial" "stdio" "-monitor" "none"
