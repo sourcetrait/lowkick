@@ -29,9 +29,11 @@ const machine = [
 # rest), so a per-thread listing reads.
 const name = ["-name" "jab,debug-threads=on"]
 const display_device = ["-device" "virtio-gpu-device,xres=1920,yres=1080"]
-const devices = [
+const input_devices = [
     "-device" "virtio-keyboard-device"
     "-device" "virtio-tablet-device"
+]
+const devices = [
     "-device" "virtio-net-device,netdev=net0" "-netdev" "user,id=net0"
     "-device" "virtio-sound-device,audiodev=snd0" "-audiodev" "none,id=snd0"
     "-device" "virtio-rng-device"
@@ -41,15 +43,17 @@ const devices = [
 # serial.log in `out`, for at most `seconds`. The status is what jab.exit
 # gave, 1 on a program fault, 124 when the bound ended the run. With
 # `capture`, the screen is taken into screen.ppm that long after the
-# start and the run is then ended (status 0). QEMU's own complaints
-# about the guest go to qemu.log; cpu_seconds is the QEMU process's CPU
-# time over the run and wall_seconds the run's length.
+# start and the run is then ended (status 0); with `keys`, each key is
+# pressed through the monitor that long after the start. QEMU's own
+# complaints about the guest go to qemu.log; cpu_seconds is the QEMU
+# process's CPU time over the run and wall_seconds the run's length.
 export def launch [
     --kernel: path             # the kernel ELF
     --image: path              # the program's .jab
     --out: path                # where serial.log and the rest go
     --seconds: int = 10        # the bound
     --capture: duration = 0sec # when to take the screen and end the run; 0 never
+    --keys: table<at: duration, key: string, hold: int> = [] # keys to press that long after the start, QEMU's names, held for hold ms
 ]: nothing -> record<status: int, serial: string, screen: string, qemu_log: string, cpu_seconds: float, wall_seconds: float> {
     let out = ($out | path expand)
     mkdir $out
@@ -64,7 +68,7 @@ export def launch [
     ^mkfifo ($monitor + ".in") ($monitor + ".out")
     let args = ([
         "--signal=TERM" $"($seconds)" "qemu-system-riscv64"
-    ] ++ $machine ++ $name ++ ["-m" "128M"] ++ $display_device ++ [
+    ] ++ $machine ++ $name ++ ["-m" "128M"] ++ $display_device ++ $input_devices ++ [
         "-bios" "none" "-kernel" ($kernel | path expand)
         "-device" $"loader,file=($image | path expand),addr=($program_base),force-raw=on"
         "-display" "none" "-monitor" $"pipe:($monitor)" "-serial" $"file:($log)"
@@ -75,12 +79,19 @@ export def launch [
     mut result: any = null
     mut cpu = 0.0
     mut captured = ($capture == 0sec)
+    mut sent = 0
     while $result == null {
         $result = (try { job recv --timeout 100ms } catch { null })
         let pid = (if ($pidfile | path exists) { open --raw $pidfile | str trim } else { "" })
         let sample = (if $pid == "" { null } else { cpu-seconds $pid })
         if $sample != null { $cpu = $sample }
-        if (not $captured) and (((date now) - $started) >= $capture) {
+        let elapsed = ((date now) - $started)
+        while $sent < ($keys | length) and ($keys | get $sent | get at) <= $elapsed {
+            let k = ($keys | get $sent)
+            if $result == null and $sample != null { monitor-send $monitor $"sendkey ($k.key) ($k.hold)" }
+            $sent += 1
+        }
+        if (not $captured) and ($elapsed >= $capture) {
             $captured = true
             if $result == null and $sample != null {
                 monitor-send $monitor $"screendump ($screen)"
@@ -406,7 +417,7 @@ def "main run" [dir: path] {
     if ($window | str starts-with "vnc=") {
         print "no display server here, so this is a development run: the display is served over VNC on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
     }
-    let args = ($machine ++ $name ++ ["-m" "4G"] ++ $display_device ++ $devices ++ [
+    let args = ($machine ++ $name ++ ["-m" "4G"] ++ $display_device ++ $input_devices ++ $devices ++ [
         "-drive" $"if=none,id=disk0,file=($disk),format=raw" "-device" "virtio-blk-device,drive=disk0"
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"

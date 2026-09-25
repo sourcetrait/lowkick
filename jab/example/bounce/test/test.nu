@@ -11,7 +11,7 @@ def main [--kernel: path, --image: path, --out: path] {
     assert ($run.screen != "") "a screen was taken"
     let screen = (jab screen $run.screen)
     assert equal [$screen.width $screen.height] [1920 1080] "a 1080p frame"
-    let ball = (jab ink $screen "ff5533")
+    let ball = (jab ink $screen "8f00ff")
     assert ($ball.count > 24900 and $ball.count < 26000) $"a disc of radius 90 has about 25447 pixels, not ($ball.count)"
     assert equal ($ball.right - $ball.left + 1) 181 "the ball's width"
     assert equal ($ball.bottom - $ball.top + 1) 181 "the ball's height"

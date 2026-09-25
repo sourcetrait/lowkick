@@ -10,8 +10,9 @@
 # names, to the host and flushes it. The screen console draws text into
 # the same framebuffer with the font in font.S and transfers only the
 # rows it touched. Commands run one at
-# a time through the control queue; the response's type says whether
-# the device took the command.
+# a time through the control queue, the hart halted until the device
+# answers; the response's type says whether the device took the
+# command.
 .set DISPLAY_RESOURCE, 1
 
 # The console: cells of FONT_WIDTH by FONT_HEIGHT, each glyph a 16-bit
@@ -196,6 +197,9 @@ display_open:
     la t0, gpu_base
     ld a0, 0(t0)
     call virtio_driver_ok
+    la t0, gpu_base
+    ld a0, 0(t0)
+    call virtio_irq_enable
     # what the display is, then the resource, its backing, the scanout,
     # and the first frame
     call gpu_get_display_info

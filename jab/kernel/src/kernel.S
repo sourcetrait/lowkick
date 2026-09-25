@@ -29,6 +29,9 @@ kmain:
     li t0, SSTATUS_SUM
     csrs sstatus, t0
     csrw sie, zero
+    # The program may read the time counter.
+    li t0, SCOUNTEREN_TM
+    csrw scounteren, t0
 .ifdef JAB_DEBUG
     la a0, msg_banner
     call uart_puts

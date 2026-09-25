@@ -9,14 +9,17 @@
 .set SSTATUS_SPP, (1 << 8)
 .set SSTATUS_SUM, (1 << 18)
 
-# sie: the supervisor timer interrupt
+# sie: the supervisor timer and external interrupts
 .set SIE_STIE, (1 << 5)
+.set SIE_SEIE, (1 << 9)
 
 # menvcfg: stimecmp (Sstc) usable in supervisor mode
 .set MENVCFG_STCE, (1 << 63)
 
-# mcounteren: cycle, time, and instret readable below machine mode
+# mcounteren: cycle, time, and instret readable below machine mode;
+# scounteren: time readable in user mode
 .set MCOUNTEREN_CY_TM_IR, 0x7
+.set SCOUNTEREN_TM, 0x2
 
 # One PMP entry, NAPOT, read, write, execute
 .set PMP_NAPOT_RWX, 0x1f

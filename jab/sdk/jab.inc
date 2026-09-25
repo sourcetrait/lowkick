@@ -1,5 +1,6 @@
 # jab.inc: the Jab SDK header. `.include "jab.inc"` and call the kernel
 # with the jab.* macros, assembler style: `jab.print message`.
+.include "jab_keys.inc"
 
 # Where a program lives. QEMU's loader device places the .jab file at
 # JAB_PROGRAM_BASE; the program owns JAB_PROGRAM_SIZE bytes from there,
@@ -23,9 +24,13 @@
 .set JAB_DISPLAY_FPS_TARGET, 30
 .set JAB_DISPLAY_FPS_CAP, 32
 
+# The time counter: `rdtime` reads it, JAB_TIME_HZ ticks a second.
+.set JAB_TIME_HZ, 10000000
+
 # What jab.await waits for: a mask of these, or 0 for all of them
 .set JAB_AWAIT_ALL, 0
 .set JAB_AWAIT_DISPLAY, 1
+.set JAB_AWAIT_KEYBOARD, 2
 
 # System call numbers (doc/syscalls.nuon)
 .set JAB_SYS_EXIT, 1
@@ -37,6 +42,7 @@
 .set JAB_SYS_DISPLAY_PRINT, 7
 .set JAB_SYS_AWAIT, 8
 .set JAB_SYS_DISPLAY_FLIP_RECT, 9
+.set JAB_SYS_KEYBOARD_INPUT, 10
 
 # jab.exit status: end the program. status is an immediate, 0 by default.
 .macro jab.exit status=0
@@ -108,10 +114,21 @@
     ecall
 .endm
 
-# jab.await mask=JAB_AWAIT_ALL: halt until an event in the mask, which is
-# the display's next frame tick (JAB_AWAIT_DISPLAY), every event there
-# is so far. The one call that waits, and how a program idles between
-# frames instead of spinning. a0 becomes the events that fired.
+# jab.keyboard.input: the next key event. a0 becomes the key's code, a
+# JAB_KEY_* (jab_keys.inc), or 0 when no event is waiting; a1 its
+# value: JAB_KEY_PRESSED, JAB_KEY_RELEASED, or JAB_KEY_HELD. The
+# keyboard comes up on the first call; a machine with no keyboard never
+# has an event. Call it until a0 is 0 to take everything that arrived.
+.macro jab.keyboard.input
+    li a7, JAB_SYS_KEYBOARD_INPUT
+    ecall
+.endm
+
+# jab.await mask=JAB_AWAIT_ALL: halt until an event in the mask: the
+# display's next frame tick (JAB_AWAIT_DISPLAY), a key event waiting
+# (JAB_AWAIT_KEYBOARD), or either (JAB_AWAIT_ALL). The one call that
+# waits, and how a program idles between frames instead of spinning. a0
+# becomes the events that fired.
 .macro jab.await mask=JAB_AWAIT_ALL
     li a0, \mask
     li a7, JAB_SYS_AWAIT
@@ -121,4 +138,9 @@
 # jab.display.await: jab.await for the display's frame tick.
 .macro jab.display.await
     jab.await JAB_AWAIT_DISPLAY
+.endm
+
+# jab.keyboard.await: jab.await for a key event.
+.macro jab.keyboard.await
+    jab.await JAB_AWAIT_KEYBOARD
 .endm

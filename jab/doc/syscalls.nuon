@@ -1,9 +1,9 @@
 # Jab system calls: the table of record. The number goes in a7, each
 # argument in the register named, then `ecall`; the result comes back in
-# a0. `kind` is how the SDK macro takes the argument: immediate (a
-# constant, checked where a range exists), address (a label), or
-# register (the program loads it before the call). sdk/jab.inc carries
-# the same numbers.
+# a0, and a second one in a1 where a call has two. `kind` is how the SDK
+# macro takes the argument: immediate (a constant, checked where a range
+# exists), address (a label), or register (the program loads it before
+# the call). sdk/jab.inc carries the same numbers.
 [
     [name, number, args, summary];
     [jab.exit, 1, [{name: status, kind: immediate, reg: a0}], "End the program with a status; QEMU exits with it until a launcher exists"],
@@ -13,6 +13,7 @@
     [jab.display.ready, 5, [], "1 when a flip would go through now, 0 while the cap holds it back"],
     [jab.display.flip, 6, [], "Show the framebuffer without waiting; 0, or 1 when early under the cap (nothing shown), 2 when not open, 3 when the device refused"],
     [jab.display.print, 7, [{name: message, kind: address, reg: a0}], "Write a NUL-terminated string inside the program's window to the screen console, opening the display if needed; 0, or jab.display.open's code"],
-    [jab.await, 8, [{name: mask, kind: immediate, reg: a0}], "Halt until an event in the mask, 0 for any; the display's frame tick (1) is the only event so far; the events that fired"],
-    [jab.display.flip.rect, 9, [{name: x, kind: register, reg: a0}, {name: y, kind: register, reg: a1}, {name: width, kind: register, reg: a2}, {name: height, kind: register, reg: a3}], "Show a rectangle of the framebuffer without waiting; jab.display.flip's codes, plus 4 when the rectangle is empty or reaches outside the screen"]
+    [jab.await, 8, [{name: mask, kind: immediate, reg: a0}], "Halt until an event in the mask, 0 for any: the display's frame tick (1) or a key event (2); the events that fired"],
+    [jab.display.flip.rect, 9, [{name: x, kind: register, reg: a0}, {name: y, kind: register, reg: a1}, {name: width, kind: register, reg: a2}, {name: height, kind: register, reg: a3}], "Show a rectangle of the framebuffer without waiting; jab.display.flip's codes, plus 4 when the rectangle is empty or reaches outside the screen"],
+    [jab.keyboard.input, 10, [], "The next key event: its code (Linux's, sdk/jab_keys.inc) in a0, or 0 with none waiting, and its value in a1, 0 released, 1 pressed, 2 held; brings the keyboard up on the first call"]
 ]

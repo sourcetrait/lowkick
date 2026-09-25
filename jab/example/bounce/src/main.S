@@ -7,7 +7,8 @@
 
 .set RADIUS, 90
 .set BACKGROUND, 0x00101018
-.set BALL, 0x00ff5533
+# LowKick's own colour, the logo's
+.set BALL, 0x008f00ff
 # Where the centre may go, keeping the whole ball on the screen
 .set LEFT, RADIUS
 .set RIGHT, (JAB_DISPLAY_WIDTH - 1 - RADIUS)

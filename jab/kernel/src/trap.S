@@ -9,9 +9,9 @@
 # kernel runs, swapped on entry and exit. Frame slot n holds register n;
 # slot 2 holds the program's sp. A system call is dispatched through
 # syscall_table by its number in a7; a handler finds its arguments in
-# slots 80 on (a0 to a3), leaves its result in slot 80, and jumps to
-# trap_return.
-.set SYSCALL_LAST, JAB_SYS_DISPLAY_FLIP_RECT
+# slots 80 on (a0 to a3), leaves its results in slots 80 and 88 (a0 and
+# a1), and jumps to trap_return.
+.set SYSCALL_LAST, JAB_SYS_KEYBOARD_INPUT
 
 .section .text
 .balign 4
@@ -233,6 +233,7 @@ syscall_table:
     .quad sys_display_print
     .quad sys_await
     .quad sys_display_flip_rect
+    .quad sys_keyboard_input
 msg_exit:
     .asciz "jab: exit "
 msg_bad_syscall:

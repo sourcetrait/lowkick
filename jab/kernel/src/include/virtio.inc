@@ -1,6 +1,7 @@
-# virtio.inc: virtio over mmio, version 2, and the virtio-gpu commands
-# the kernel drives the display with, as the virtio 1.3 specification
-# lays them out. Offsets are bytes; registers are 32 bits wide.
+# virtio.inc: virtio over mmio, version 2, and the virtio-gpu and
+# virtio-input pieces the kernel drives the display and the keyboard
+# with, as the virtio 1.3 specification lays them out. Offsets are
+# bytes; registers are 32 bits wide.
 
 # The transport's registers
 .set VIRTIO_MMIO_MAGIC_VALUE, 0x000
@@ -15,6 +16,8 @@
 .set VIRTIO_MMIO_QUEUE_NUM, 0x038
 .set VIRTIO_MMIO_QUEUE_READY, 0x044
 .set VIRTIO_MMIO_QUEUE_NOTIFY, 0x050
+.set VIRTIO_MMIO_INTERRUPT_STATUS, 0x060
+.set VIRTIO_MMIO_INTERRUPT_ACK, 0x064
 .set VIRTIO_MMIO_STATUS, 0x070
 .set VIRTIO_MMIO_QUEUE_DESC_LOW, 0x080
 .set VIRTIO_MMIO_QUEUE_DESC_HIGH, 0x084
@@ -22,12 +25,14 @@
 .set VIRTIO_MMIO_QUEUE_DRIVER_HIGH, 0x094
 .set VIRTIO_MMIO_QUEUE_DEVICE_LOW, 0x0a0
 .set VIRTIO_MMIO_QUEUE_DEVICE_HIGH, 0x0a4
+.set VIRTIO_MMIO_CONFIG, 0x100
 
 # What a transport says about itself: "virt" as a little-endian word,
 # version 2 for a modern transport, and the device id it carries
 .set VIRTIO_MAGIC, 0x74726976
 .set VIRTIO_VERSION_MODERN, 2
 .set VIRTIO_ID_GPU, 16
+.set VIRTIO_ID_INPUT, 18
 
 # Status bits, written in order as the driver comes up
 .set VIRTIO_STATUS_ACKNOWLEDGE, 1
@@ -53,10 +58,12 @@
 .set VIRTQ_AVAIL_FLAGS, 0
 .set VIRTQ_AVAIL_IDX, 2
 .set VIRTQ_AVAIL_RING, 4
-.set VIRTQ_AVAIL_F_NO_INTERRUPT, 1
 .set VIRTQ_USED_FLAGS, 0
 .set VIRTQ_USED_IDX, 2
 .set VIRTQ_USED_RING, 4
+.set VIRTQ_USED_ELEM_ID, 0
+.set VIRTQ_USED_ELEM_LEN, 4
+.set VIRTQ_USED_ELEM_SIZE, 8
 
 # The kernel's virtqueue record: the three rings, each at its alignment
 # (16, 2, 4), then the last used index the kernel saw
@@ -121,3 +128,21 @@
 
 # The framebuffer's format: bytes blue, green, red, unused
 .set VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM, 2
+
+# virtio-input's config: a select and a subselect byte pick what the
+# payload at VIRTIO_INPUT_CFG_DATA describes, and size says how long it
+# is; EV_BITS with an event type gives the bitmap of the codes the
+# device can send
+.set VIRTIO_INPUT_CFG_SELECT, 0
+.set VIRTIO_INPUT_CFG_SUBSEL, 1
+.set VIRTIO_INPUT_CFG_SIZE, 2
+.set VIRTIO_INPUT_CFG_DATA, 8
+.set VIRTIO_INPUT_CFG_EV_BITS, 0x11
+
+# A virtio-input event, as Linux's: a type, a code, and a value
+.set VIRTIO_INPUT_EVENT_TYPE, 0
+.set VIRTIO_INPUT_EVENT_CODE, 2
+.set VIRTIO_INPUT_EVENT_VALUE, 4
+.set VIRTIO_INPUT_EVENT_SIZE, 8
+.set EV_SYN, 0
+.set EV_KEY, 1
