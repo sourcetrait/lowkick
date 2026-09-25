@@ -1,6 +1,7 @@
 # wasd's integration test: your sphere starts at the centre and, after
 # D is held for most of a second, has moved right and not up or down;
-# the other sphere is on the screen; the hart halts between frames.
+# the other sphere is whole on the screen, never overlapped; the hart
+# halts between frames.
 use ../../../sdk/nu/jab.nu
 use std/assert
 
@@ -17,8 +18,9 @@ def main [--kernel: path, --image: path, --out: path] {
     assert ($centre_x > 1160) $"your sphere has moved right from the centre: ($centre_x)"
     assert ($centre_y >= 538 and $centre_y <= 542) $"and not up or down: ($centre_y)"
     let ball = (jab ink $screen "8f00ff")
-    assert ($ball.count > 1000) $"the other sphere is on the screen, though yours may cover part of it: ($ball.count) pixels"
-    assert (($ball.right - $ball.left + 1) <= 181 and ($ball.bottom - $ball.top + 1) <= 181) "and no bigger than a sphere"
+    assert ($ball.count > 24900 and $ball.count < 26000) $"the other sphere is whole on the screen, since the two never overlap: ($ball.count) pixels"
+    assert equal ($ball.right - $ball.left + 1) 181 "the other sphere's width"
+    assert equal ($ball.bottom - $ball.top + 1) 181 "the other sphere's height"
     print $"wasd: yours at ($centre_x),($centre_y), the other at ($ball.left),($ball.top); QEMU used ($run.cpu_seconds) CPU seconds over ($run.wall_seconds | math round -p 2) seconds"
     assert ($run.cpu_seconds < ($run.wall_seconds * 0.5)) "the hart halts between frames"
     print "wasd: ok"

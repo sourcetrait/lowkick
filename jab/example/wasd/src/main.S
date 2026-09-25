@@ -2,9 +2,10 @@
 # example with simple physics. W, A, S, and D push your sphere, harder
 # the longer a key is held, up to three times the bouncing sphere's
 # speed; with no key held it slows to a stop; the space bar stops it
-# at once; the walls bounce it back at the speed it hit them. The other
-# sphere starts somewhere and bounces off the walls as in bounce, and
-# off your sphere too. Positions and speeds carry FIX fractional bits.
+# at once; the walls bounce it back at the speed it hit them, and so
+# does the other sphere. The other sphere starts somewhere and bounces
+# off the walls as in bounce, and off your sphere too. The two never
+# overlap. Positions and speeds carry FIX fractional bits.
 .include "jab.inc"
 
 .set RADIUS, 90
@@ -27,9 +28,11 @@
 .set TOP_SPEED, (26 * ONE)
 .set ACCEL, (ONE * 4 / 5)
 .set DECEL, (ONE / 2)
-# The spheres touch when their centres are this close, squared, in
-# fixed point
-.set TOUCH_SQ, ((2 * RADIUS) * (2 * RADIUS))
+# The spheres have met when their centres are this close in pixels,
+# squared, and are then set this far apart: two more than touching, so
+# the drawn discs, at whole pixels, never share one
+.set TOUCH_SQ, ((2 * RADIUS + 2) * (2 * RADIUS + 2))
+.set APART, ((2 * RADIUS + 3) * ONE)
 
 .section .text
 .global _start
@@ -77,6 +80,7 @@ _start:
     li t0, BALL_VY
     la t1, ball_vy
     sd t0, 0(t1)
+    call collide
     call remember
 frame:
     jab.await
@@ -86,6 +90,7 @@ frame:
     beqz t0, frame
     call move_player
     call move_ball
+    call collide
     call render
     j frame
 
@@ -191,6 +196,35 @@ wall:
 2:
     ret
 
+# clamp: a0 is a position, a1 the least centre and a2 the greatest in
+# pixels; a0 becomes the position kept between them.
+clamp:
+    srai t0, a0, FIX
+    bge t0, a1, 1f
+    slli a0, a1, FIX
+    ret
+1:
+    ble t0, a2, 2f
+    slli a0, a2, FIX
+2:
+    ret
+
+# isqrt: a0 becomes the whole square root of a0, rounded down.
+isqrt:
+    beqz a0, 3f
+    mv t0, a0
+1:
+    divu t1, a0, t0
+    add t1, t1, t0
+    srli t1, t1, 1
+    bgeu t1, t0, 2f
+    mv t0, t1
+    j 1b
+2:
+    mv a0, t0
+3:
+    ret
+
 # move_player: your sphere's speed from the keys, then its position.
 move_player:
     addi sp, sp, -16
@@ -233,9 +267,7 @@ move_player:
     addi sp, sp, 16
     ret
 
-# move_ball: the other sphere on, off the walls, and off yours: when
-# they touch and it is coming closer, its speed is reflected about the
-# line between the centres.
+# move_ball: the other sphere on, and off the walls.
 move_ball:
     addi sp, sp, -16
     sd ra, 8(sp)
@@ -261,47 +293,140 @@ move_ball:
     sd a0, 0(t0)
     la t0, ball_vy
     sd a1, 0(t0)
-    # from your centre to the other: dx, dy, and the distance squared
-    la t0, ball_x
-    ld t1, 0(t0)
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# collide: when the spheres have met, each one closing on the other
+# has its speed reflected about the line between the centres, as off a
+# wall, and the two are set apart along that line so they never
+# overlap, kept on the screen.
+collide:
+    addi sp, sp, -64
+    sd ra, 56(sp)
+    sd s2, 48(sp)
+    sd s3, 40(sp)
+    sd s4, 32(sp)
+    sd s5, 24(sp)
+    sd s6, 16(sp)
+    sd s7, 8(sp)
     la t0, player_x
-    ld t2, 0(t0)
-    sub t1, t1, t2
-    la t0, ball_y
-    ld t3, 0(t0)
+    ld s2, 0(t0)
     la t0, player_y
-    ld t2, 0(t0)
-    sub t3, t3, t2
-    mul t4, t1, t1
-    mul t5, t3, t3
-    add t4, t4, t5
-    li t5, TOUCH_SQ
-    slli t5, t5, 2 * FIX
-    bgt t4, t5, 9f
-    # touching: the speed's part along the line, and only if it points
-    # inward
+    ld s3, 0(t0)
+    la t0, ball_x
+    ld s4, 0(t0)
+    la t0, ball_y
+    ld s5, 0(t0)
+    # from your centre to the other: dx, dy, and the distance squared
+    sub s6, s4, s2
+    sub s7, s5, s3
+    mul a5, s6, s6
+    mul t0, s7, s7
+    add a5, a5, t0
+    li t0, TOUCH_SQ
+    slli t0, t0, 2 * FIX
+    bgt a5, t0, 9f
+    beqz a5, 3f
+    # the other sphere, if closing: its speed's part along the line,
+    # taken away twice
     la t0, ball_vx
     ld t5, 0(t0)
     la t0, ball_vy
     ld t6, 0(t0)
-    mul a0, t5, t1
-    mul a1, t6, t3
+    mul a0, t5, s6
+    mul a1, t6, s7
     add a0, a0, a1
-    bgez a0, 9f
+    bgez a0, 1f
     slli a0, a0, 1
-    mul a1, a0, t1
-    div a1, a1, t4
+    mul a1, a0, s6
+    div a1, a1, a5
     sub t5, t5, a1
-    mul a1, a0, t3
-    div a1, a1, t4
+    mul a1, a0, s7
+    div a1, a1, a5
     sub t6, t6, a1
     la t0, ball_vx
     sd t5, 0(t0)
     la t0, ball_vy
     sd t6, 0(t0)
+1:
+    # yours, if closing, the same way
+    la t0, player_vx
+    ld t5, 0(t0)
+    la t0, player_vy
+    ld t6, 0(t0)
+    mul a0, t5, s6
+    mul a1, t6, s7
+    add a0, a0, a1
+    blez a0, 2f
+    slli a0, a0, 1
+    mul a1, a0, s6
+    div a1, a1, a5
+    sub t5, t5, a1
+    mul a1, a0, s7
+    div a1, a1, a5
+    sub t6, t6, a1
+    la t0, player_vx
+    sd t5, 0(t0)
+    la t0, player_vy
+    sd t6, 0(t0)
+2:
+    # apart: half the shortfall each, along the line
+    mv a0, a5
+    call isqrt
+    mv a4, a0
+    j 4f
+3:
+    # centres together: apart along x
+    li s6, ONE
+    li s7, 0
+    li a4, ONE
+4:
+    li t0, APART
+    sub t0, t0, a4
+    blez t0, 9f
+    srai t0, t0, 1
+    mul t1, s6, t0
+    div t1, t1, a4
+    mul t2, s7, t0
+    div t2, t2, a4
+    sub s2, s2, t1
+    sub s3, s3, t2
+    add s4, s4, t1
+    add s5, s5, t2
+    mv a0, s2
+    li a1, LEFT
+    li a2, RIGHT
+    call clamp
+    la t0, player_x
+    sd a0, 0(t0)
+    mv a0, s3
+    li a1, TOP
+    li a2, BOTTOM
+    call clamp
+    la t0, player_y
+    sd a0, 0(t0)
+    mv a0, s4
+    li a1, LEFT
+    li a2, RIGHT
+    call clamp
+    la t0, ball_x
+    sd a0, 0(t0)
+    mv a0, s5
+    li a1, TOP
+    li a2, BOTTOM
+    call clamp
+    la t0, ball_y
+    sd a0, 0(t0)
 9:
-    ld ra, 8(sp)
-    addi sp, sp, 16
+    ld ra, 56(sp)
+    ld s2, 48(sp)
+    ld s3, 40(sp)
+    ld s4, 32(sp)
+    ld s5, 24(sp)
+    ld s6, 16(sp)
+    ld s7, 8(sp)
+    addi sp, sp, 64
     ret
 
 # render: erase both spheres where they were, draw them where they are,
