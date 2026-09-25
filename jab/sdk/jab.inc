@@ -54,6 +54,7 @@
 .set JAB_SYS_TAR_FIND, 19
 .set JAB_SYS_GZ_SIZE, 20
 .set JAB_SYS_GZ_READ, 21
+.set JAB_SYS_CHECKSUM, 22
 
 # gzip, which is DEFLATE with a jacket: ten bytes of header, optionally
 # an extra field, a name and a comment, then the compressed bytes, then
@@ -375,6 +376,17 @@
     mv a1, \archive
     mv a0, \buffer
     li a7, JAB_SYS_TAR_FIND
+    ecall
+.endm
+
+# jab.checksum address, size: the SHA3-256 of those bytes. A digest is
+# 32 bytes, which is exactly four registers, so it comes back in a0 to
+# a3 and needs no buffer: storing them with four `sd` writes the digest
+# in the order anything else computes it.
+.macro jab.checksum address, size
+    mv a1, \size
+    mv a0, \address
+    li a7, JAB_SYS_CHECKSUM
     ecall
 .endm
 

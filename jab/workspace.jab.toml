@@ -12,5 +12,6 @@ programs = [
   'test/blocklist',
   'test/romfs',
   'test/tar',
-  'test/gz'
+  'test/gz',
+  'test/checksum'
 ]
