@@ -11,7 +11,7 @@
 # syscall_table by its number in a7; a handler finds its arguments in
 # slots 80 on (a0 to a5), leaves its results in slots 80 on (a0, and a1
 # to a3 where a call has more), and jumps to trap_return.
-.set SYSCALL_LAST, JAB_SYS_SPRITE_DRAW
+.set SYSCALL_LAST, JAB_SYS_SPRITE_LOAD
 
 .section .text
 .balign 4
@@ -298,6 +298,7 @@ syscall_table:
     .quad sys_png_size
     .quad sys_sprite_png
     .quad sys_sprite_draw
+    .quad sys_sprite_load
 msg_bad_syscall:
     .asciz "jab: unknown system call "
 msg_bad_address:

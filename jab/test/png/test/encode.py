@@ -3,14 +3,16 @@
 # colour type and depth the kernel decodes with every filter type
 # reached, one cut into IDATs of a single byte, one big enough for
 # several IDATs, one wrapped in ancillary chunks, and the files the
-# kernel must refuse. Writes each into the directory given and prints,
-# as JSON, what the kernel should make of each: the size its header
-# says and its pixels in the kernel's own format, four bytes a pixel,
-# blue, green, red, alpha.
+# kernel must refuse; then the directories jab.sprite.load reads, a
+# sprite of four frames and two that must refuse. Writes each into the
+# directory given and prints, as JSON, what the kernel should make of
+# each: the size its header says and its pixels in the kernel's own
+# format, four bytes a pixel, blue, green, red, alpha.
 #
 #     python3 encode.py <directory>
 
 import json
+import os
 import random
 import struct
 import sys
@@ -133,6 +135,7 @@ def rgba_image(rng, width, height):
 def main(directory):
     rng = random.Random(20260925)
     fixtures = []
+    dirs = []
 
     def emit(name, data, width, height, pixels=None):
         with open(f"{directory}/{name}", "wb") as f:
@@ -191,9 +194,9 @@ def main(directory):
         pixels = [[palette[s] + ((alphas[s] if s < len(alphas) else 255),) for s in row] for row in samples]
         emit(f"idx{depth}.png", encode(w, h, depth, 3, rows, filters, plte=plte, trns=trns), w, h, pixels)
 
-    # a sheet of two frames, decoded with frames=2
-    pixels, rows = rgba_image(rng, 8, h)
-    emit("sheet.png", encode(8, h, 8, 6, rows, filters), 8, h, pixels)
+    # a sheet of two frames stacked, decoded with frames=2
+    pixels, rows = rgba_image(rng, w, 10)
+    emit("sheet.png", encode(w, 10, 8, 6, rows, cycle_filters(10)), w, 10, pixels)
 
     # the stream cut into IDATs of one byte, so every boundary is crossed
     pixels, rows = rgba_image(rng, w, h)
@@ -227,7 +230,25 @@ def main(directory):
     emit("truncated.png", good[:at + 4 + 20], w, h)
     emit("notpng.png", b"hello, this is not a png\n", 0, 0)
 
-    print(json.dumps({"fixtures": fixtures}))
+    # the directories jab.sprite.load reads: a sprite of four frames, one
+    # whose second frame is another size, and one with no 0.png
+    def emit_dir(name, frames):
+        os.mkdir(f"{directory}/{name}")
+        record = {"name": name, "frames": len(frames), "native": ""}
+        for k, (fw, fh, extra) in enumerate(frames):
+            px, rw = rgba_image(rng, fw, fh)
+            with open(f"{directory}/{name}/{k + extra}.png", "wb") as f:
+                f.write(encode(fw, fh, 8, 6, rw, cycle_filters(fh)))
+            record["native"] += native(px)
+            if k == 0:
+                record["width"], record["height"] = fw, fh
+        dirs.append(record)
+
+    emit_dir("walker", [(5, 6, 0)] * 4)
+    emit_dir("mixed", [(5, 6, 0), (6, 6, 0)])
+    emit_dir("nozero", [(5, 6, 1)])
+
+    print(json.dumps({"fixtures": fixtures, "dirs": dirs}))
 
 
 if __name__ == "__main__":

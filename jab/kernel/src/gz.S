@@ -216,41 +216,64 @@ gz_le32:
     ret
 
 # gz_crc32: a0 is a buffer and a1 how many bytes; a0 becomes their
-# CRC-32, the reflected one gzip, zip, and PNG all use. The table is
-# built once, the first time anything asks.
+# CRC-32, the reflected one gzip, zip, and PNG all use: begin, one
+# update, end. The three parts are separate so bytes arriving in
+# pieces, a PNG chunk streamed off a disk, sum the same.
 .global gz_crc32
 gz_crc32:
     addi sp, sp, -32
     sd ra, 24(sp)
     sd a0, 0(sp)
     sd a1, 8(sp)
+    call gz_crc_begin
+    ld a1, 0(sp)
+    ld a2, 8(sp)
+    call gz_crc_update
+    call gz_crc_end
+    ld ra, 24(sp)
+    addi sp, sp, 32
+    ret
+
+# gz_crc_begin: a0 becomes the running state of a fresh CRC-32, all
+# ones, with the table built if it was not.
+.global gz_crc_begin
+gz_crc_begin:
+    addi sp, sp, -16
+    sd ra, 8(sp)
     call gz_crc_table
-    ld a0, 0(sp)
-    ld a1, 8(sp)
-    li t0, -1
-    li t1, 0xffffffff
-    and t0, t0, t1              # the register starts all ones
+    li a0, 0xffffffff
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# gz_crc_update: a0 is the state, a1 a buffer, a2 how many bytes; a0
+# becomes the state with them taken in.
+.global gz_crc_update
+gz_crc_update:
     li t2, 0
+    la t5, gz_crc
 1:
-    bgeu t2, a1, 2f
-    add t3, a0, t2
+    bgeu t2, a2, 2f
+    add t3, a1, t2
     lbu t3, 0(t3)
-    xor t4, t0, t3
+    xor t4, a0, t3
     andi t4, t4, 0xff
     slli t4, t4, 2
-    la t5, gz_crc
     add t4, t4, t5
     lwu t4, 0(t4)
-    srli t0, t0, 8
-    xor t0, t0, t4
+    srli a0, a0, 8
+    xor a0, a0, t4
     addi t2, t2, 1
     j 1b
 2:
+    ret
+
+# gz_crc_end: a0, the state, becomes the CRC-32.
+.global gz_crc_end
+gz_crc_end:
     li t1, 0xffffffff
-    xor a0, t0, t1
+    xor a0, a0, t1
     and a0, a0, t1
-    ld ra, 24(sp)
-    addi sp, sp, 32
     ret
 
 # gz_crc_table: the 256 entries of the reflected CRC-32, built on first

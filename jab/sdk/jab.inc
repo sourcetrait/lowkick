@@ -65,22 +65,25 @@
 .set JAB_SYS_PNG_SIZE, 26
 .set JAB_SYS_SPRITE_PNG, 27
 .set JAB_SYS_SPRITE_DRAW, 28
+.set JAB_SYS_SPRITE_LOAD, 29
 
 # A sprite: frames of pixels in the framebuffer's own format, which the
 # program owns and jab.sprite.draw blends onto the screen. The record is
 # a header of three 32-bit fields - the width of one frame, the height,
-# and the frame count - and then the pixels at JAB_SPRITE_PIXELS, the
-# whole sheet row by row, every frame side by side, so frame k is a
-# column range of the sheet. A pixel is a little-endian word 0xAARRGGBB:
-# the framebuffer's blue, green, red, and the unused byte carrying alpha,
-# 0 clear through 255 solid. A sheet of one frame is a plain image.
+# and the frame count - and then the pixels at JAB_SPRITE_PIXELS, frame
+# after frame, each frame its rows top to bottom, so frame k is one
+# contiguous block. A pixel is a little-endian word 0xAARRGGBB: the
+# framebuffer's blue, green, red, and the unused byte carrying alpha, 0
+# clear through 255 solid. A sprite of one frame is a plain image.
 #
-# jab.sprite.png fills a sprite from a PNG, decoding in place, and the
+# jab.sprite.png fills a sprite from a PNG the program holds, a sheet of
+# frames stacked top to bottom, and jab.sprite.load from a directory of
+# PNGs on a romfs disk, one frame each; both decode in place, so the
 # buffer holding the record needs JAB_SPRITE_PIXELS plus four bytes a
-# pixel of the sheet plus one byte a row of it: for a sheet of W by H,
-# JAB_SPRITE_PIXELS + W * H * 4 + H. A program that knows its asset
-# writes that down with .set; one that does not asks jab.png.size first.
-# Declare the record on a 4-byte boundary, as its fields want.
+# pixel and one byte a row of every frame: for N frames of W by H,
+# JAB_SPRITE_PIXELS + N * (W * H * 4 + H). A program that knows its
+# asset writes that down with .set; one that does not asks jab.png.size
+# first. Declare the record on a 4-byte boundary, as its fields want.
 .set JAB_SPRITE_WIDTH, 0
 .set JAB_SPRITE_HEIGHT, 4
 .set JAB_SPRITE_FRAMES, 8
@@ -92,10 +95,16 @@
 # silhouette. A sprite meant to be recoloured is drawn white with its
 # shape in alpha. The scale is in 256ths: JAB_SPRITE_SCALE_ONE draws the
 # frame at its own size, half that at half, twice at twice, sampling the
-# nearest source pixel; at most JAB_SPRITE_SCALE_MAX.
+# nearest source pixel; at most JAB_SPRITE_SCALE_MAX. The pose turns
+# and mirrors the frame: its low sixteen bits are an angle in degrees,
+# clockwise, and JAB_SPRITE_FLIP_H and JAB_SPRITE_FLIP_V mirror it left
+# to right and top to bottom, applied to the frame before the turn; the
+# turn is about the scaled frame's centre.
 .set JAB_SPRITE_PLAIN, 0x00ffffff
 .set JAB_SPRITE_SCALE_ONE, 256
 .set JAB_SPRITE_SCALE_MAX, 65536
+.set JAB_SPRITE_FLIP_H, 0x10000
+.set JAB_SPRITE_FLIP_V, 0x20000
 
 # PNG, as GIMP 3 exports it by default from any image mode: colour types
 # 0 (grey), 2 (RGB), 3 (indexed, with its palette and its transparency),
@@ -117,13 +126,14 @@
 .set JAB_PNG_PALETTE, 8
 .set JAB_PNG_FRAMES, 9
 .set JAB_PNG_SIZE, 10
-.set JAB_PNG_INPUT, 11
-.set JAB_PNG_OUTPUT, 12
-.set JAB_PNG_BLOCK, 13
-.set JAB_PNG_STORED, 14
-.set JAB_PNG_CODES, 15
-.set JAB_PNG_SYMBOL, 16
-.set JAB_PNG_DISTANCE, 17
+.set JAB_PNG_NOT_FOUND, 11
+.set JAB_PNG_INPUT, 12
+.set JAB_PNG_OUTPUT, 13
+.set JAB_PNG_BLOCK, 14
+.set JAB_PNG_STORED, 15
+.set JAB_PNG_CODES, 16
+.set JAB_PNG_SYMBOL, 17
+.set JAB_PNG_DISTANCE, 18
 
 # gzip, which is DEFLATE with a jacket: ten bytes of header, optionally
 # an extra field, a name and a comment, then the compressed bytes, then
@@ -558,13 +568,14 @@
 
 # jab.sprite.png sprite, source, length, capacity, frames=1: decode the
 # PNG at `source` into the sprite record at `sprite`, as a sheet of that
-# many frames side by side, so the PNG's width must divide by `frames`.
-# `capacity` is how many bytes the record's buffer holds, a constant,
-# and must reach the rule above, which the call checks. The decode is in
-# place, so the buffer holds the filtered rows on the way to the pixels.
-# a0 becomes a JAB_PNG_* code: JAB_PNG_OK with the record filled,
-# JAB_PNG_FRAMES when the width does not divide, JAB_PNG_SIZE when the
-# buffer is too small, and the rest for what is wrong with the file.
+# many frames stacked top to bottom, so the PNG's height must divide by
+# `frames`. `capacity` is how many bytes the record's buffer holds, a
+# constant, and must reach the rule above, which the call checks. The
+# decode is in place, so the buffer holds the filtered rows on the way
+# to the pixels. a0 becomes a JAB_PNG_* code: JAB_PNG_OK with the record
+# filled, JAB_PNG_FRAMES when the height does not divide, JAB_PNG_SIZE
+# when the buffer is too small, and the rest for what is wrong with the
+# file.
 .macro jab.sprite.png sprite, source, length, capacity, frames=1
     li a4, \frames
     li a3, \capacity
@@ -575,19 +586,46 @@
     ecall
 .endm
 
-# jab.sprite.draw sprite, frame, x, y, tint, scale: blend frame `frame`
-# of the sprite onto the framebuffer with its top left at x, y, which
-# may be negative or past the screen; what falls off an edge is clipped.
-# `tint` is a colour the pixels are multiplied by, JAB_SPRITE_PLAIN
-# when left out, and `scale` is in 256ths, JAB_SPRITE_SCALE_ONE when
-# left out; both registers when given, so a program may vary them at
-# run time. Per pixel, alpha 0 is skipped, 255 copied, and anything
-# between blended over what is there: each channel becomes
-# (s * a + d * (255 - a)) / 255, rounded, with s the sprite's tinted
-# channel and d the screen's. It only draws; the program flips, whole
-# or the rectangle. a0 becomes 0; 1 when the frame is not in the sprite;
-# 2 when the scale is past JAB_SPRITE_SCALE_MAX.
-.macro jab.sprite.draw sprite, frame, x, y, tint, scale
+# jab.sprite.load sprite, id, path, capacity: fill the sprite record
+# from a directory on disk `id` named by `path`, a label: its frames are
+# the files 0.png, 1.png, and on, in order until one is missing, each
+# decoded straight off the disk into its own frame, so the program holds
+# no buffer for the files; every frame must be one size. `capacity` is
+# how many bytes the record's buffer holds, a constant, and must reach
+# the rule above for the frames there are. a0 becomes a JAB_PNG_* code:
+# JAB_PNG_NOT_FOUND when the directory or its 0.png is not there,
+# JAB_PNG_FRAMES when a frame's size differs from the first's,
+# JAB_PNG_SIZE when the buffer is too small, else a frame's own code.
+.macro jab.sprite.load sprite, id, path, capacity
+    li a3, \capacity
+    la a2, \path
+    mv a1, \id
+    mv a0, \sprite
+    li a7, JAB_SYS_SPRITE_LOAD
+    ecall
+.endm
+
+# jab.sprite.draw sprite, frame, x, y, tint, scale, pose: blend frame
+# `frame` of the sprite onto the framebuffer with its top left at x, y,
+# which may be negative or past the screen; what falls off an edge is
+# clipped. `tint` is a colour the pixels are multiplied by,
+# JAB_SPRITE_PLAIN when left out; `scale` is in 256ths,
+# JAB_SPRITE_SCALE_ONE when left out; `pose` is an angle in degrees with
+# JAB_SPRITE_FLIP_H and JAB_SPRITE_FLIP_V above it, 0 when left out,
+# the turn about the scaled frame's centre with x, y still where the
+# unturned frame's top left would be. All three are registers when
+# given, so a program may vary them at run time. Per pixel, alpha 0 is
+# skipped, 255 copied, and anything between blended over what is there:
+# each channel becomes (s * a + d * (255 - a)) / 255, rounded, with s
+# the sprite's tinted channel and d the screen's. It only draws; the
+# program flips, whole or the rectangle. a0 becomes 0; 1 when the frame
+# is not in the sprite; 2 when the scale is past JAB_SPRITE_SCALE_MAX.
+.macro jab.sprite.draw sprite, frame, x, y, tint, scale, pose
+    .ifb \pose
+    li a6, 0
+    .else
+    mv a6, \pose
+    .endif
     .ifb \scale
     li a5, JAB_SPRITE_SCALE_ONE
     .else

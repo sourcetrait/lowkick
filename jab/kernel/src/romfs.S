@@ -100,9 +100,46 @@ sys_romfs_find:
     call buffer_bounds
     ld a0, 104(sp)
     call message_bounds
+    mv a2, a0
+    mv a3, a1
+    mv a0, s0
+    ld a1, 96(sp)
+    call romfs_lookup
     mv s1, a0
     mv s2, a1
-    ld s3, 96(sp)
+    bnez s1, 1f
+    ld a0, 80(sp)
+    la a1, romfs_scratch
+    li a2, JAB_ROMFS_ENTRY
+    call copy_bytes
+1:
+    sd s1, 80(sp)
+    sd s2, 88(sp)
+    j trap_return
+
+# romfs_lookup: a0 is a disk's index, a1 the directory to start from
+# (JAB_ROMFS_ROOT for the root), a2 a path and a3 where it ends. The
+# walk of jab.romfs.find: a0 becomes 0 with the entry's record in
+# romfs_scratch, 1 when nothing of that name is there, or 2 when a
+# component along the way is not a directory; a1 the entry's own
+# offset, hard links followed. What png.S uses to find a sprite's
+# directory and each frame in it.
+.global romfs_lookup
+romfs_lookup:
+    addi sp, sp, -80
+    sd ra, 72(sp)
+    sd s0, 64(sp)
+    sd s1, 56(sp)
+    sd s2, 48(sp)
+    sd s3, 40(sp)
+    sd s4, 32(sp)
+    sd s5, 24(sp)
+    sd s6, 16(sp)
+    sd s7, 8(sp)
+    mv s0, a0
+    mv s3, a1
+    mv s1, a2
+    mv s2, a3
     bgeu s1, s2, 1f
     lbu t0, 0(s1)
     li t1, '/'
@@ -171,10 +208,6 @@ sys_romfs_find:
     addi s7, s7, 1
     j 9b
 10:
-    ld a0, 80(sp)
-    la a1, romfs_scratch
-    li a2, JAB_ROMFS_ENTRY
-    call copy_bytes
     li a0, 0
     mv a1, s6
     j 0f
@@ -191,9 +224,17 @@ sys_romfs_find:
     li a0, 2
     li a1, 0
 0:
-    sd a0, 80(sp)
-    sd a1, 88(sp)
-    j trap_return
+    ld ra, 72(sp)
+    ld s0, 64(sp)
+    ld s1, 56(sp)
+    ld s2, 48(sp)
+    ld s3, 40(sp)
+    ld s4, 32(sp)
+    ld s5, 24(sp)
+    ld s6, 16(sp)
+    ld s7, 8(sp)
+    addi sp, sp, 80
+    ret
 
 # sys_romfs_read (jab.romfs.read): a0 is the buffer, a1 the disk, a2 the
 # file's header offset, a3 the byte of it to start at, a4 how many bytes
@@ -327,6 +368,7 @@ romfs_magic:
 # romfs_disk: a0 is the id a program gave; a0 becomes that disk's index.
 # Ends the run when the machine has no such disk or it carries no romfs,
 # both of which a program can see for itself with jab.block.list.
+.global romfs_disk
 romfs_disk:
     addi sp, sp, -16
     sd ra, 8(sp)
@@ -494,6 +536,7 @@ romfs_resolve:
 # record holds is reported cut, which is what a Linux mount of the same
 # image reports, while the length used here is the real one, so the data
 # still begins where it truly does.
+.global romfs_entry
 romfs_entry:
     addi sp, sp, -64
     sd ra, 48(sp)
@@ -584,6 +627,7 @@ romfs_entry:
 # bytes readable after it in a1. The bounce remembers what it holds, so
 # a chain walked inside it is read once. Ends the run on a disk error or
 # an offset past the disk.
+.global romfs_window
 romfs_window:
     addi sp, sp, -48
     sd ra, 40(sp)
@@ -786,6 +830,7 @@ romfs_fault_end:
 .balign 8
 romfs_bounce:
     .skip ROMFS_BOUNCE_BYTES
+.global romfs_scratch
 romfs_scratch:
     .skip JAB_ROMFS_ENTRY
 romfs_roots:

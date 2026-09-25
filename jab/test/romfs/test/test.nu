@@ -71,11 +71,9 @@ def build-fixture [repo: path, stage: path, img: path]: nothing -> record {
     mkdir ($stage | path join "asset" "img" "logo")
     let png = ($repo | path join "asset" "img" "logo" "lowkick.480x640.png")
     cp $png ($stage | path join "asset" "img" "logo" "lowkick.480x640.png")
-    let font = (glob ($repo | path join "**" "*.S")
-        | where {|p| ($p | path type) == "file" }
-        | each {|p| { path: ($p | path relative-to $repo), bytes: (ls -D $p | get 0.size | into int), full: $p } }
-        | sort-by bytes
-        | last)
+    # the console font, the one source file the program names by path
+    let font_path = (["jab" "kernel" "src" "font.S"] | path join)
+    let font = { path: $font_path, bytes: (ls -D ($repo | path join $font_path) | get 0.size | into int), full: ($repo | path join $font_path) }
     mkdir ($stage | path join $font.path | path dirname)
     cp $font.full ($stage | path join $font.path)
 

@@ -4,9 +4,11 @@
 # frames with that much buffer and reports `p <code> <frame width>
 # <height> <frames>`, or `p <code>` when the decode failed; a decoded
 # sprite's pixels follow as hex, 64 bytes to a line as `x <hex>`, for
-# the test to hold against what it put in. The frames and the capacity
-# come from the table at run time, so the plain ecall is used where the
-# macro would want constants.
+# the test to hold against what it put in. Then, for each row of a
+# second table, loads a sprite from a directory of frames straight off
+# the disk and reports `l <code> <frame width> <height> <frames>` the
+# same way. The frames and the capacity come from the tables at run
+# time, so the plain ecall is used where the macro would want constants.
 .include "jab.inc"
 
 .set DISK, 1
@@ -79,13 +81,47 @@ _start:
     mv a4, s10
     li a7, JAB_SYS_SPRITE_PNG
     ecall
+    la a1, word_p
+    call report
+    addi s0, s0, 24
+    j 1b
+8:
+    # the directories, straight off the disk
+    la s0, loads
+4:
+    ld s1, 0(s0)
+    beqz s1, 5f
+    ld s11, 8(s0)
+    la a0, sprite
+    li a1, DISK
+    mv a2, s1
+    mv a3, s11
+    li a7, JAB_SYS_SPRITE_LOAD
+    ecall
+    la a1, word_l
+    call report
+    addi s0, s0, 16
+    j 4b
+5:
+    jab.uart.print msg_done
+    jab.exit 0
+9:
+    jab.uart.print msg_missing
+    jab.exit 1
+
+# report: a0 is a sprite call's code and a1 the word that opens the
+# line. The line, and on success the sprite's pixels as hex.
+report:
+    addi sp, sp, -16
+    sd ra, 8(sp)
     mv s8, a0
+    mv s9, a1
     call line_reset
-    la a0, word_p
+    mv a0, s9
     call line_str
     mv a0, s8
     call line_dec
-    bnez s8, 4f
+    bnez s8, 1f
     li a0, ' '
     call line_char
     la t0, sprite
@@ -101,10 +137,10 @@ _start:
     la t0, sprite
     lwu a0, JAB_SPRITE_FRAMES(t0)
     call line_dec
-4:
+1:
     call line_nl
     jab.uart.print line
-    bnez s8, 7f
+    bnez s8, 4f
     # the pixels, byte by byte
     la t0, sprite
     lwu t1, JAB_SPRITE_WIDTH(t0)
@@ -114,16 +150,16 @@ _start:
     mul s7, s7, t2
     slli s7, s7, 2              # the bytes
     li s9, 0
-5:
-    bgeu s9, s7, 7f
+2:
+    bgeu s9, s7, 4f
     call line_reset
     la a0, word_x
     call line_str
     li s6, 0
-6:
-    bgeu s9, s7, 61f
+3:
+    bgeu s9, s7, 31f
     li t0, COLUMNS
-    bgeu s6, t0, 61f
+    bgeu s6, t0, 31f
     la t0, sprite
     addi t0, t0, JAB_SPRITE_PIXELS
     add t0, t0, s9
@@ -131,20 +167,15 @@ _start:
     call line_hex
     addi s9, s9, 1
     addi s6, s6, 1
-    j 6b
-61:
+    j 3b
+31:
     call line_nl
     jab.uart.print line
-    j 5b
-7:
-    addi s0, s0, 24
-    j 1b
-8:
-    jab.uart.print msg_done
-    jab.exit 0
-9:
-    jab.uart.print msg_missing
-    jab.exit 1
+    j 2b
+4:
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
 
 line_reset:
     la t0, line
@@ -242,8 +273,8 @@ line_hex:
 .section .rodata
 .balign 8
 # the path, the frames, and the capacity of each decode; the last two
-# rows ask for frames the width does not divide by and for a buffer too
-# small, on a file the rows before decoded
+# rows ask for frames the height does not divide by and for a buffer
+# too small, on a file the rows before decoded
 table:
     .quad path_rgba8, 1, SPRITEBUF
     .quad path_rgb8, 1, SPRITEBUF
@@ -271,6 +302,19 @@ table:
     .quad path_rgba8, 3, SPRITEBUF
     .quad path_rgba8, 1, 100
     .quad 0, 0, 0
+
+# the directory and the capacity of each load: four frames, then a
+# directory whose second frame is another size, one with no 0.png, one
+# that is not there, a file where a directory should be, and the four
+# frames with too small a buffer
+loads:
+    .quad dir_walker, SPRITEBUF
+    .quad dir_mixed, SPRITEBUF
+    .quad dir_nozero, SPRITEBUF
+    .quad dir_missing, SPRITEBUF
+    .quad path_rgba8, SPRITEBUF
+    .quad dir_walker, 100
+    .quad 0, 0
 
 path_rgba8:
     .asciz "/rgba8.png"
@@ -318,11 +362,21 @@ path_truncated:
     .asciz "/truncated.png"
 path_notpng:
     .asciz "/notpng.png"
+dir_walker:
+    .asciz "/walker"
+dir_mixed:
+    .asciz "/mixed"
+dir_nozero:
+    .asciz "/nozero"
+dir_missing:
+    .asciz "/missing"
 
 word_s:
     .asciz "s "
 word_p:
     .asciz "p "
+word_l:
+    .asciz "l "
 word_x:
     .asciz "x "
 msg_done:

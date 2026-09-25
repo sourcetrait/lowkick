@@ -2,24 +2,17 @@
 # python's zlib, shaped as GIMP 3 shapes a file, ships them in a romfs
 # image, and holds the kernel's account of each against what went in:
 # the size from the header, the code the decode gave, and every pixel
-# of every decoded image in the kernel's own format. The rows of the
-# program's table are mirrored here, refusals and all.
+# of every decoded image in the kernel's own format; then the sprites
+# loaded from directories of frames straight off the disk, the same
+# way. The rows of the program's two tables are mirrored here, refusals
+# and all.
 use ../../../sdk/nu/jab.nu
 use std/assert
 
 const JAB_PNG_OK = 0
-const JAB_PNG_NOT_PNG = 1
-const JAB_PNG_UNSUPPORTED = 2
-const JAB_PNG_TRUNCATED = 3
-const JAB_PNG_CRC = 4
-const JAB_PNG_ZLIB = 5
-const JAB_PNG_LENGTH = 6
-const JAB_PNG_FILTER = 7
-const JAB_PNG_FRAMES = 9
-const JAB_PNG_SIZE = 10
 
-# The program's table: the file, the frames it asks for, and the codes
-# expected from jab.png.size and jab.sprite.png.
+# The program's first table: the file, the frames it asks for, and the
+# codes expected from jab.png.size and jab.sprite.png.
 const table = [
     [name, frames, size_code, png_code];
     ["rgba8.png", 1, 0, 0]
@@ -49,25 +42,36 @@ const table = [
     ["rgba8.png", 1, 0, 10]
 ]
 
+# The second: the directory and the code expected from jab.sprite.load.
+const loads = [
+    [name, code];
+    ["walker", 0]
+    ["mixed", 9]
+    ["nozero", 11]
+    ["missing", 11]
+    ["rgba8.png", 11]
+    ["walker", 10]
+]
+
 def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     let stage = ($out | path join "fixtures")
     if ($stage | path exists) { rm -rf $stage }
     mkdir $stage
-    let made = (^python3 ($env.FILE_PWD | path join "encode.py") $stage | from json | get fixtures)
+    let made = (^python3 ($env.FILE_PWD | path join "encode.py") $stage | from json)
     let img = ($out | path join "png.romfs")
     ^genromfs -d $stage -f $img -V png
     let run = (jab launch --kernel $kernel --image $image --out $out --set $set --disk $img --serial "png" --seconds 60)
     assert equal $run.status 0 $"exit status, with the UART: ($run.serial | str substring 0..600)"
     assert equal (open --raw $run.qemu_log | into binary | bytes length) 0 "QEMU has no complaint about the guest"
     let lines = ($run.serial | lines)
-    assert equal ($lines | last) "done" "the program reached the end of its table"
+    assert equal ($lines | last) "done" "the program reached the end of its tables"
 
-    # the program's answers, row by row: an s line, a p line, then the
-    # pixels of a decoded image
+    # the program's answers, row by row: an s line and a p line, or an l
+    # line, then the pixels of a decoded sprite
     mut answers = []
     mut current: any = null
     for l in ($lines | drop 1) {
-        if ($l | str starts-with "s ") {
+        if ($l | str starts-with "s ") or ($l | str starts-with "l ") {
             if $current != null { $answers = ($answers | append $current) }
             $current = { s: $l, p: "", hex: "" }
         } else if ($l | str starts-with "p ") {
@@ -77,27 +81,22 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
         }
     }
     if $current != null { $answers = ($answers | append $current) }
-    assert equal ($answers | length) ($table | length) "one answer per row of the table"
+    assert equal ($answers | length) (($table | length) + ($loads | length)) "one answer per row of the tables"
 
     mut decoded = 0
     mut pixels = 0
     for row in ($table | enumerate) {
         let want = $row.item
         let got = ($answers | get $row.index)
-        let fixture = ($made | where name == $want.name | first)
+        let fixture = ($made.fixtures | where name == $want.name | first)
         let size_line = (if $want.size_code == $JAB_PNG_OK {
             $"s 0 ($fixture.width) ($fixture.height)"
         } else { $"s ($want.size_code) 0 0" })
         assert equal $got.s $size_line $"($want.name): jab.png.size"
         if $want.png_code == $JAB_PNG_OK {
-            let fw = ($fixture.width // $want.frames)
-            assert equal $got.p $"p 0 ($fw) ($fixture.height) ($want.frames)" $"($want.name): jab.sprite.png with ($want.frames) frames"
-            assert equal ($got.hex | str length) ($fixture.native | str length) $"($want.name): every pixel came back"
-            if $got.hex != $fixture.native {
-                let first = (0..<($fixture.native | str length) | where {|i| ($got.hex | str substring $i..$i) != ($fixture.native | str substring $i..$i) } | first)
-                let px = ($first // 8)
-                assert equal ($got.hex | str substring ($px * 8)..<($px * 8 + 8)) ($fixture.native | str substring ($px * 8)..<($px * 8 + 8)) $"($want.name): pixel ($px) \(x ($px mod $fixture.width), y ($px // $fixture.width)\) as blue, green, red, alpha"
-            }
+            let fh = ($fixture.height // $want.frames)
+            assert equal $got.p $"p 0 ($fixture.width) ($fh) ($want.frames)" $"($want.name): jab.sprite.png with ($want.frames) frames"
+            compare-pixels $want.name $got.hex $fixture.native $fixture.width
             $decoded += 1
             $pixels += ($fixture.width * $fixture.height)
         } else {
@@ -105,6 +104,32 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
         }
     }
 
-    print $"png: ($decoded) images decoded, ($pixels) pixels compared byte for byte; (($table | length) - $decoded) refusals by their codes"
+    mut loaded = 0
+    for row in ($loads | enumerate) {
+        let want = $row.item
+        let got = ($answers | get (($table | length) + $row.index))
+        if $want.code == $JAB_PNG_OK {
+            let dir = ($made.dirs | where name == $want.name | first)
+            assert equal $got.s $"l 0 ($dir.width) ($dir.height) ($dir.frames)" $"($want.name): jab.sprite.load"
+            compare-pixels $want.name $got.hex $dir.native $dir.width
+            $loaded += 1
+            $pixels += ($dir.width * $dir.height * $dir.frames)
+        } else {
+            assert equal $got.s $"l ($want.code)" $"($want.name): jab.sprite.load refuses with ($want.code)"
+        }
+    }
+
+    print $"png: ($decoded) images decoded and ($loaded) sprite loaded off the disk, ($pixels) pixels compared byte for byte; (($table | length) + ($loads | length) - $decoded - $loaded) refusals by their codes"
     print "png: ok"
+}
+
+# Every byte of a sprite's pixels against the fixture's, naming the
+# first pixel that differs.
+def compare-pixels [name: string, got: string, want: string, width: int]: nothing -> nothing {
+    assert equal ($got | str length) ($want | str length) $"($name): every pixel came back"
+    if $got != $want {
+        let first = (0..<($want | str length) | where {|i| ($got | str substring $i..$i) != ($want | str substring $i..$i) } | first)
+        let px = ($first // 8)
+        assert equal ($got | str substring ($px * 8)..<($px * 8 + 8)) ($want | str substring ($px * 8)..<($px * 8 + 8)) $"($name): pixel ($px) \(x ($px mod $width), y ($px // $width)\) as blue, green, red, alpha"
+    }
 }

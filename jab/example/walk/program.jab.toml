@@ -1,0 +1,5 @@
+name = 'walk'
+sdk = '../../sdk'
+includes = ['../../sdk']
+link = '../../sdk/program.ld'
+assets = '../../../asset/img'
