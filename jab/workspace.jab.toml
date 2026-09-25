@@ -10,5 +10,7 @@ programs = [
   'test/framecap',
   'test/keys',
   'test/blocklist',
-  'test/romfs'
+  'test/romfs',
+  'test/tar',
+  'test/gz'
 ]

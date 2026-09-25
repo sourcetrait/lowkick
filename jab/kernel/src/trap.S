@@ -11,7 +11,7 @@
 # syscall_table by its number in a7; a handler finds its arguments in
 # slots 80 on (a0 to a3), leaves its results in slots 80 and 88 (a0 and
 # a1), and jumps to trap_return.
-.set SYSCALL_LAST, JAB_SYS_ROMFS_READ
+.set SYSCALL_LAST, JAB_SYS_GZ_READ
 
 .section .text
 .balign 4
@@ -283,6 +283,10 @@ syscall_table:
     .quad sys_romfs_list
     .quad sys_romfs_find
     .quad sys_romfs_read
+    .quad sys_tar_list
+    .quad sys_tar_find
+    .quad sys_gz_size
+    .quad sys_gz_read
 msg_exit:
     .asciz "jab: exit "
 msg_bad_syscall:

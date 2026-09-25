@@ -50,6 +50,60 @@
 .set JAB_SYS_ROMFS_LIST, 15
 .set JAB_SYS_ROMFS_FIND, 16
 .set JAB_SYS_ROMFS_READ, 17
+.set JAB_SYS_TAR_LIST, 18
+.set JAB_SYS_TAR_FIND, 19
+.set JAB_SYS_GZ_SIZE, 20
+.set JAB_SYS_GZ_READ, 21
+
+# gzip, which is DEFLATE with a jacket: ten bytes of header, optionally
+# an extra field, a name and a comment, then the compressed bytes, then
+# a CRC-32 of the contents and their length. That length is why the
+# read is one shot: a program asks jab.gz.size first, sizes its buffer,
+# and gets everything in a single call. DEFLATE cannot be entered in the
+# middle, so a cursor would mean the kernel holding decoder state
+# between calls, which nothing else here does. What can go wrong is one
+# of these; the ones from JAB_GZ_INPUT on come from the DEFLATE stream
+# itself rather than the jacket.
+.set JAB_GZ_OK, 0
+.set JAB_GZ_NOT_GZIP, 1
+.set JAB_GZ_TRUNCATED, 2
+.set JAB_GZ_CRC, 3
+.set JAB_GZ_LENGTH, 4
+.set JAB_GZ_INPUT, 5
+.set JAB_GZ_OUTPUT, 6
+.set JAB_GZ_BLOCK, 7
+.set JAB_GZ_STORED, 8
+.set JAB_GZ_CODES, 9
+.set JAB_GZ_SYMBOL, 10
+.set JAB_GZ_DISTANCE, 11
+
+# A tar archive, read where the program already holds it: unlike romfs,
+# which lives on a disk, a tar is bytes in the program's own memory,
+# usually a .tar.gz read out of romfs and inflated. Everything a tar
+# call names is therefore an offset into that block of bytes, and an
+# entry's data needs no reading call at all: JAB_TAR_DATA is where it
+# already sits. A header is 512 bytes and so is every block after it, so
+# an offset is always a multiple of 512. The type is tar's own byte,
+# stored as a digit character. A ustar path is a 155-byte prefix, a
+# separator, and a 100-byte name, so 256 characters at most, and the
+# record holds all of them.
+.set JAB_TAR_ENTRY, 296
+.set JAB_TAR_PAGE, 16
+.set JAB_TAR_LIST_SIZE, (JAB_TAR_PAGE * JAB_TAR_ENTRY)
+.set JAB_TAR_BLOCK, 512
+.set JAB_TAR_OFFSET, 0
+.set JAB_TAR_DATA, 8
+.set JAB_TAR_SIZE, 16
+.set JAB_TAR_TYPE, 24
+.set JAB_TAR_NAME, 32
+.set JAB_TAR_NAME_BYTES, 264
+.set JAB_TAR_REGULAR, '0'
+.set JAB_TAR_HARDLINK, '1'
+.set JAB_TAR_SYMLINK, '2'
+.set JAB_TAR_CHAR, '3'
+.set JAB_TAR_BLOCKDEV, '4'
+.set JAB_TAR_DIRECTORY, '5'
+.set JAB_TAR_FIFO, '6'
 
 # The disks: QEMU's virtio-blk devices, one id each, 1 to JAB_BLOCK_MAX
 # in the order their transports sit on the machine. A sector is
@@ -291,6 +345,61 @@
     mv a1, \id
     mv a0, \buffer
     li a7, JAB_SYS_ROMFS_FIND
+    ecall
+.endm
+
+# jab.tar.list buffer, archive, length, offset=zero, capacity: write a
+# record per entry of a tar archive the program already holds into the
+# buffer, starting at that header's offset and 0 for the first. a0
+# becomes the records written and a1 the offset to start the next page
+# at, 0 once the archive has ended. An entry's data needs no call: the
+# record's JAB_TAR_DATA is where it already sits.
+.macro jab.tar.list buffer, archive, length, offset=zero, capacity=JAB_TAR_PAGE
+    li a4, \capacity
+    mv a3, \offset
+    mv a2, \length
+    mv a1, \archive
+    mv a0, \buffer
+    li a7, JAB_SYS_TAR_LIST
+    ecall
+.endm
+
+# jab.tar.find buffer, archive, length, path: look for that path in the
+# archive and write its record into the buffer, which holds one. A
+# directory's trailing separator is ignored, since tar writes one.
+# `path` is a label. a0 becomes 0 with the record written or 1 when the
+# archive holds no such name; a1 becomes the entry's own offset.
+.macro jab.tar.find buffer, archive, length, path
+    la a3, \path
+    mv a2, \length
+    mv a1, \archive
+    mv a0, \buffer
+    li a7, JAB_SYS_TAR_FIND
+    ecall
+.endm
+
+# jab.gz.size source, length: the length the contents of that gzip will
+# be, which its trailer carries, so a program can size its buffer before
+# it inflates anything. a0 becomes that length and a1 JAB_GZ_OK or
+# JAB_GZ_NOT_GZIP.
+.macro jab.gz.size source, length
+    mv a1, \length
+    mv a0, \source
+    li a7, JAB_SYS_GZ_SIZE
+    ecall
+.endm
+
+# jab.gz.read buffer, source, length, capacity: inflate that gzip into
+# the buffer in one call, checking its CRC-32 and its length against
+# what came out. Unlike a list's capacity this one is a register, since
+# a program works it out from jab.gz.size rather than writing it down.
+# a0 becomes the bytes written and a1 one of the JAB_GZ_* codes.
+.macro jab.gz.read buffer, source, length, capacity
+    mv a3, \capacity
+    mv a2, \length
+    mv a1, \source
+    mv a0, \buffer
+    li a7, JAB_SYS_GZ_READ
     ecall
 .endm
 
