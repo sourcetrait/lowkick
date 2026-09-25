@@ -69,10 +69,12 @@ API over it, its records at the top of its `main.S`.
 A run prints nothing of its own; what the kernel says in a debug build
 is in `debug.log` beside the program's build output, and what a program
 sends over the API is in `api.out` there. `just watch`, from any shell
-while a program runs, opens the host's own top on the QEMU process, per
-thread where the host can: the harts as `CPU 0/TCG` and on, the main
-loop under the process name, which is where the host's copy and paint
-of each flip lands.
+while a program runs, shows the QEMU process per thread: on Linux in
+the host's own top, the harts as `CPU 0/TCG` and on and the main loop
+under the process name, which is where the host's copy and paint of
+each flip lands; on macOS, whose top has no thread view, `ps -M` of
+the process every second, its first row the thread that draws the
+window and the rest unnamed, until the run ends.
 
 The CPU is RVA23, `-cpu rva23s64`, which QEMU carries from 9.2; on an
 older QEMU the tool runs the generic `rv64`, which has what the kernel

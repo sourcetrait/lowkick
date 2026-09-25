@@ -399,18 +399,29 @@ def jab-pids []: nothing -> list<int> {
     ps -l | where {|p| ($p.command | str contains "qemu-system-riscv64") and ($p.command | str contains "-name jab") } | get pid
 }
 
-# Watch the running Jab QEMU in the host's own top, whatever shell this
-# is run from: on Linux per thread, where the harts (`CPU 0/TCG` and
-# on) and the main loop (under the process name, where the host's copy
-# and paint land) show by name; on macOS the process, since its top has
-# no thread view. Ends when top does.
+# Watch the running Jab QEMU per thread, whatever shell this is run
+# from: on Linux in the host's own top, where the harts (`CPU 0/TCG`
+# and on) and the main loop (under the process name, where the host's
+# copy and paint land) show by name, ending when top does; on macOS,
+# whose top has no thread view, `ps -M` of the process every second,
+# the first row the AppKit thread that draws the window, QEMU's own
+# loop and the harts below it unnamed, until the run ends or the watch
+# is interrupted.
 def "main watch" [] {
     let pids = (jab-pids)
     if ($pids | is-empty) { error make {msg: "no jab is running"} }
     let list = ($pids | each {|p| $p | into string } | str join ",")
     match $nu.os-info.name {
         "linux" => { ^top -H -p $list },
-        "macos" => { ^top ...($pids | each {|p| ["-pid" ($p | into string)] } | flatten) },
+        "macos" => {
+            loop {
+                let alive = (jab-pids)
+                if ($alive | is-empty) { print "jab: the run has ended"; break }
+                let threads = ($alive | each {|p| ^ps -M -p ($p | into string) | complete | get stdout } | str join (char nl))
+                print $"(ansi cls)(date now | format date '%H:%M:%S')  jab ($alive | each {|p| $p | into string } | str join ', ')(char nl)($threads)"
+                sleep 1sec
+            }
+        },
         _ => { error make {msg: $"no top here for ($nu.os-info.name); the jab processes are ($list)"} },
     }
 }
