@@ -12,3 +12,6 @@ runs only under QEMU's `virt` machine.
 
 Build and run with `just` (see the `justfile`): `just kernel`,
 `just prog helloworld`, `just test helloworld`, `just run helloworld`.
+The toolchain is found by its install prefix, the directory holding
+`bin/`: set `RISCV_PREFIX`, or symlink it as `extern/prefix` (ignored by
+git); with neither, the tools are expected on `PATH`.

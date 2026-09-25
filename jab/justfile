@@ -1,14 +1,18 @@
 # LowKick Jab: build the kernel and test programs, run them under QEMU.
 #
-# Needs a riscv64 GNU binutils on PATH as riscv64-unknown-linux-gnu-*, or
-# JAB_CROSS set to another prefix (an absolute path works), and
-# qemu-system-riscv64. Artifacts land under target/, which git ignores.
+# Needs a riscv64 GNU toolchain and qemu-system-riscv64. The toolchain is
+# found by its install prefix, the directory holding bin/: RISCV_PREFIX
+# if that environment variable is set, else the symlink extern/prefix
+# if it exists (git ignores extern/), else the tools are expected on
+# PATH. Artifacts land under target/, which git ignores.
 
-cross := env("JAB_CROSS", "riscv64-unknown-linux-gnu-")
-asm := cross + "as"
-link := cross + "ld"
-objcopy := cross + "objcopy"
-objdump := cross + "objdump"
+triple := "riscv64-unknown-linux-gnu-"
+riscv_prefix := if env("RISCV_PREFIX", "") != "" { env("RISCV_PREFIX") } else { if path_exists("extern/prefix") == "true" { "extern/prefix" } else { "" } }
+riscv_tool := if riscv_prefix != "" { riscv_prefix / "bin" / triple } else { triple }
+asm := riscv_tool + "as"
+link := riscv_tool + "ld"
+objcopy := riscv_tool + "objcopy"
+objdump := riscv_tool + "objdump"
 qemu := "qemu-system-riscv64"
 target := "target"
 kernel_dir := target / "kernel"
