@@ -8,5 +8,7 @@ programs = [
   'test/badstore',
   'test/displayprint',
   'test/framecap',
-  'test/keys'
+  'test/keys',
+  'test/blocklist',
+  'test/romfs'
 ]

@@ -9,7 +9,8 @@ runs only under QEMU's `virt` machine.
   `src/`.
 - `sdk/` what a program uses: `jab.inc`, the program link script, and
   `nu/jab.nu` for its test.
-- `doc/syscalls.nuon` the system call table of record.
+- `doc/syscalls.nuon` the system call table of record; `doc/lists.md`
+  how every call that fills a buffer with records works.
 - `example/<name>/`, `test/<name>/` programs by category, each with
   `program.jab.toml`, a `justfile`, `src/main.S`, and its integration
   test at `test/test.nu`.

@@ -31,6 +31,7 @@
 # version 2 for a modern transport, and the device id it carries
 .set VIRTIO_MAGIC, 0x74726976
 .set VIRTIO_VERSION_MODERN, 2
+.set VIRTIO_ID_BLOCK, 2
 .set VIRTIO_ID_GPU, 16
 .set VIRTIO_ID_INPUT, 18
 
@@ -72,6 +73,9 @@
 .set VQ_USED, (VQ_AVAIL + 32)
 .set VQ_LAST_USED, (VQ_USED + 80)
 .set VQ_BYTES, (VQ_LAST_USED + 8)
+# An array of these needs every record at the descriptor table's own
+# alignment, so its stride is the record rounded up to 16.
+.set VQ_STRIDE, (((VQ_BYTES + 15) / 16) * 16)
 
 # The virtio-gpu control header every command and response starts with
 .set VIRTIO_GPU_HDR_TYPE, 0
@@ -138,6 +142,24 @@
 .set VIRTIO_INPUT_CFG_SIZE, 2
 .set VIRTIO_INPUT_CFG_DATA, 8
 .set VIRTIO_INPUT_CFG_EV_BITS, 0x11
+
+# virtio-blk: the capacity, in 512-byte sectors, opens the config space
+# as a little-endian 64-bit value, read as two words since the transport
+# takes config accesses of four bytes. A request is a header the device
+# reads, the data, and a status byte the device writes, three
+# descriptors chained; the type and the sector go in the header, and
+# GET_ID answers with the device ID string QEMU takes from `serial=`.
+.set VIRTIO_BLK_CFG_CAPACITY_LOW, 0
+.set VIRTIO_BLK_CFG_CAPACITY_HIGH, 4
+.set VIRTIO_BLK_ID_BYTES, 20
+.set VIRTIO_BLK_T_IN, 0
+.set VIRTIO_BLK_T_OUT, 1
+.set VIRTIO_BLK_T_GET_ID, 8
+.set VIRTIO_BLK_S_OK, 0
+.set VIRTIO_BLK_REQ_TYPE, 0
+.set VIRTIO_BLK_REQ_IOPRIO, 4
+.set VIRTIO_BLK_REQ_SECTOR, 8
+.set VIRTIO_BLK_REQ_SIZE, 16
 
 # A virtio-input event, as Linux's: a type, a code, and a value
 .set VIRTIO_INPUT_EVENT_TYPE, 0

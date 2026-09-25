@@ -1,0 +1,2 @@
+a program's own assets, built into a romfs image by the sdk's tool and
+put on the machine as its one disk.

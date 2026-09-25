@@ -11,7 +11,7 @@
 # syscall_table by its number in a7; a handler finds its arguments in
 # slots 80 on (a0 to a3), leaves its results in slots 80 and 88 (a0 and
 # a1), and jumps to trap_return.
-.set SYSCALL_LAST, JAB_SYS_KEYBOARD_INPUT
+.set SYSCALL_LAST, JAB_SYS_ROMFS_READ
 
 .section .text
 .balign 4
@@ -108,6 +108,48 @@ sys_uart_print:
 2:
     sd zero, 80(sp)
     j trap_return
+
+# buffer_bounds: a0 is an address from the program and a1 a count of
+# bytes. Returns with both kept when the whole range lies inside the
+# program's window, and ends the run otherwise, so a call that fills a
+# buffer can write it without checking again.
+.global buffer_bounds
+buffer_bounds:
+    li t0, JAB_PROGRAM_BASE
+    bltu a0, t0, bad_address
+    li t1, JAB_STACK_TOP
+    bgeu a0, t1, bad_address
+    add t2, a0, a1
+    bltu t2, a0, bad_address    # a count that wraps is nobody's buffer
+    bgtu t2, t1, bad_address
+    ret
+
+# copy_bytes: a2 bytes from a1 to a0. Program memory is reached through
+# SUM, so either end may be the program's.
+.global copy_bytes
+copy_bytes:
+    beqz a2, 2f
+1:
+    lbu t0, 0(a1)
+    sb t0, 0(a0)
+    addi a0, a0, 1
+    addi a1, a1, 1
+    addi a2, a2, -1
+    bnez a2, 1b
+2:
+    ret
+
+# zero_bytes: a1 bytes at a0 become zero.
+.global zero_bytes
+zero_bytes:
+    beqz a1, 2f
+1:
+    sb zero, 0(a0)
+    addi a0, a0, 1
+    addi a1, a1, -1
+    bnez a1, 1b
+2:
+    ret
 
 bad_address:
     la a0, msg_bad_address
@@ -234,12 +276,19 @@ syscall_table:
     .quad sys_await
     .quad sys_display_flip_rect
     .quad sys_keyboard_input
+    .quad sys_block_list
+    .quad sys_block_find
+    .quad sys_block_read
+    .quad sys_block_write
+    .quad sys_romfs_list
+    .quad sys_romfs_find
+    .quad sys_romfs_read
 msg_exit:
     .asciz "jab: exit "
 msg_bad_syscall:
     .asciz "jab: unknown system call "
 msg_bad_address:
-    .asciz "jab: print: address outside the program\n"
+    .asciz "jab: address outside the program\n"
 msg_program_fault:
     .asciz "jab: program fault: cause="
 msg_kernel_fault:

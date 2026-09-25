@@ -9,6 +9,13 @@
 .set SSTATUS_SPP, (1 << 8)
 .set SSTATUS_SUM, (1 << 18)
 
+# sstatus: the extension state fields, two bits each. A program may use
+# floating point and vectors, which RVA23 requires of the machine, so
+# the kernel leaves both Initial rather than Off; Off would make the
+# first such instruction an illegal instruction.
+.set SSTATUS_FS_INITIAL, (1 << 13)
+.set SSTATUS_VS_INITIAL, (1 << 9)
+
 # sie: the supervisor timer and external interrupts
 .set SIE_STIE, (1 << 5)
 .set SIE_SEIE, (1 << 9)

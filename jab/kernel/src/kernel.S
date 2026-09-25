@@ -28,6 +28,11 @@ kmain:
     # the framebuffer), so SUM.
     li t0, SSTATUS_SUM
     csrs sstatus, t0
+    # The machine is RVA23, so the program has floating point and
+    # vectors; their state starts Initial, since Off makes the first
+    # such instruction an illegal instruction.
+    li t0, SSTATUS_FS_INITIAL | SSTATUS_VS_INITIAL
+    csrs sstatus, t0
     csrw sie, zero
     # The program may read the time counter.
     li t0, SCOUNTEREN_TM

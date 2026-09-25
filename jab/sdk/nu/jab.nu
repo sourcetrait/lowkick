@@ -21,8 +21,16 @@ const triples = [
     "riscv64-unknown-elf-" "riscv64-elf-"
 ]
 const program_base = "0x80800000"
+# RVA23 is the profile Jab pins, so everything it mandates is on whether
+# or not Jab itself uses it; the supervisor profile is the one carrying
+# an MMU mode and the supervisor timer the frame clock needs. RVA23 says
+# nothing about machine mode, so QEMU's model of it has no physical
+# memory protection at all, and the kernel enters in machine mode and
+# opens PMP before it has a trap vector: without `pmp=true` that write
+# is an illegal instruction which traps to address zero and spins there
+# forever.
 const machine = [
-    "-machine" "virt" "-cpu" "rv64" "-accel" "tcg" "-smp" "4"
+    "-machine" "virt" "-cpu" "rva23s64,pmp=true" "-accel" "tcg" "-smp" "4"
     "-global" "virtio-mmio.force-legacy=false"
 ]
 # The process is named, and so are its threads (CPU 0/TCG and the
@@ -54,6 +62,8 @@ export def launch [
     --seconds: int = 10        # the bound
     --capture: duration = 0sec # when to take the screen and end the run; 0 never
     --keys: table<at: duration, key: string, hold: int> = [] # keys to press that long after the start, QEMU's names, held for hold ms
+    --disk: path = ""          # a raw image to put on the machine as the one virtio-blk disk
+    --serial: string = "disk0" # the disk's serial, which the guest reads back as its own; 19 characters at most
 ]: nothing -> record<status: int, serial: string, screen: string, qemu_log: string, cpu_seconds: float, wall_seconds: float> {
     let out = ($out | path expand)
     mkdir $out
@@ -74,8 +84,9 @@ export def launch [
         "-display" "none" "-monitor" $"pipe:($monitor)" "-serial" $"file:($log)"
         "-pidfile" $pidfile "-d" "guest_errors" "-D" $qemu_log
     ])
+    let disked = ($args ++ (disk-args $disk $serial))
     let started = (date now)
-    job spawn { ^timeout ...$args | complete | job send 0 }
+    job spawn { ^timeout ...$disked | complete | job send 0 }
     mut result: any = null
     mut cpu = 0.0
     mut captured = ($capture == 0sec)
@@ -157,6 +168,58 @@ export def thumbnail [screen: record<width: int, height: int, pixels: binary>, -
         } | str join ""
     } | str join "\n"
 }
+
+# The QEMU arguments that put a raw image on the machine as its one
+# virtio-blk disk, or nothing at all when there is no image. The serial
+# is what the guest reads back with jab.block.list, so it is how a
+# program tells one disk from another.
+def disk-args [disk: path, serial: string]: nothing -> list<string> {
+    if ($disk | is-empty) { return [] }
+    [
+        "-drive" $"if=none,id=disk0,file=($disk | path expand),format=raw"
+        "-device" $"virtio-blk-device,drive=disk0,serial=($serial)"
+    ]
+}
+
+# A program's assets as a romfs image, built when the directory it names
+# has moved on: `assets` in its manifest, relative to the manifest, with
+# the program's own name as the volume's. The image is what `just run`
+# puts on the machine, and the program reads it with jab.romfs.*.
+def assets-image [c: record]: nothing -> string {
+    let declared = ($c.manifest | get -o assets | default "")
+    if $declared == "" { return "" }
+    let dir = ($c.here | path join $declared | path expand)
+    if not ($dir | path exists) {
+        error make {msg: $"($c.manifest.name): assets = '($declared)' names no directory at ($dir)"}
+    }
+    assets-names $dir
+    let image = ($c.out | path join $"($c.manifest.name).romfs")
+    let stamp = ($c.out | path join "assets.flags")
+    let inputs = (files-under [$dir])
+    if ($image | path exists) and (not (stale $image ($inputs ++ [$dir]) $c.manifest.name $stamp)) { return $image }
+    mkdir $c.out
+    ^genromfs -d $dir -f $image -V (volume-name $c.manifest.name)
+    $c.manifest.name | save -f $stamp
+    $image
+}
+
+# A romfs name is at most 127 characters, which is what a Linux mount of
+# the same image can read: its driver lists through a 128-byte buffer
+# and works out where a file's data begins from a length that stops
+# there, so a longer name makes it read the wrong bytes. The kernel
+# reports such a name cut rather than wrong, but an image Jab builds
+# never has one.
+def assets-names [dir: path]: nothing -> nothing {
+    let long = (glob ($dir | path join "**" "*") | each {|p| $p | path basename } | where {|n| ($n | str length) > 127 })
+    if not ($long | is-empty) {
+        error make {msg: $"romfs names are 127 characters at most, which is what a linux mount can read; too long: ($long | first)"}
+    }
+}
+
+# A volume's name is bound the same way, and a disk's serial by virtio's
+# 20-byte ID string, which carries a terminator only when it fits.
+def volume-name [name: string]: nothing -> string { $name | str substring 0..<127 }
+def disk-serial [name: string]: nothing -> string { $name | str substring 0..<19 }
 
 # The CPU seconds a process has used, user plus system, or null once it
 # is gone.
@@ -376,7 +439,12 @@ def "main workspace test" [ws: path, category: string = "", name: string = ""] {
         let ready = (prepared ($ws | path join $p))
         let script = ($ready.context.here | path join "test" "test.nu")
         if not ($script | path exists) { error make {msg: $"($p) has no test/test.nu"} }
-        let r = (^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out | complete)
+        let assets = (assets-image $ready.context)
+        let r = (if $assets == "" {
+            ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out | complete
+        } else {
+            ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out --assets $assets | complete
+        })
         print $"--- ($p)"
         print -n $r.stdout
         if $r.exit_code != 0 { print -n $r.stderr }
@@ -402,7 +470,12 @@ def "main test" [dir: path] {
     let ready = (prepared $dir)
     let script = ($ready.context.here | path join "test" "test.nu")
     if not ($script | path exists) { error make {msg: $"($ready.context.manifest.name) has no test/test.nu"} }
-    ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out
+    let assets = (assets-image $ready.context)
+    if $assets == "" {
+        ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out
+    } else {
+        ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out --assets $assets
+    }
 }
 
 # Build the program at `dir` and run it with the console window and the
@@ -411,14 +484,20 @@ def "main test" [dir: path] {
 def "main run" [dir: path] {
     let ready = (prepared $dir)
     let c = $ready.context
-    let disk = ($c.target | path join "disk.img")
-    if not ($disk | path exists) { ^truncate -s 64M $disk }
+    # a program's own assets when it has them, else the blank image that
+    # has always been there, so the machine always carries one disk
+    let assets = (assets-image $c)
+    let disk = (if $assets == "" {
+        let blank = ($c.target | path join "disk.img")
+        if not ($blank | path exists) { ^truncate -s 64M $blank }
+        $blank
+    } else { $assets })
+    let serial = (if $assets == "" { "disk0" } else { disk-serial $c.manifest.name })
     let window = (display $c.manifest)
     if ($window | str starts-with "vnc=") {
         print "no display server here, so this is a development run: the display is served over VNC on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
     }
-    let args = ($machine ++ $name ++ ["-m" "4G"] ++ $display_device ++ $input_devices ++ $devices ++ [
-        "-drive" $"if=none,id=disk0,file=($disk),format=raw" "-device" "virtio-blk-device,drive=disk0"
+    let args = ($machine ++ $name ++ ["-m" "4G"] ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ [
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"
         "-display" $window "-serial" "stdio" "-monitor" "none"
