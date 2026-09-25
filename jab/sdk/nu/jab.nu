@@ -6,11 +6,17 @@
 # lookup the workspace defines: the workspace directory (the nearest
 # parent holding workspace.jab.toml), the toolchain (RISCV_TOOLCHAIN, else
 # extern/riscv beside the kernel or program, else the workspace's, else
-# the tools on PATH), the target (.target in the workspace, else beside
+# the tools on PATH, under the official triple or a distribution's
+# name), the target (.target in the workspace, else beside
 # the kernel or program), and the manifests. A build is skipped when its
 # output is newer than every input and the flags match the last build.
 
-const triple = "riscv64-unknown-linux-gnu-"
+# The riscv64 binutils prefixes: the official toolchain's triple first,
+# then the names distributions package the tools under.
+const triples = [
+    "riscv64-unknown-linux-gnu-" "riscv64-linux-gnu-"
+    "riscv64-unknown-elf-" "riscv64-elf-"
+]
 const program_base = "0x80800000"
 const machine = [
     "-machine" "virt" "-cpu" "rv64" "-accel" "tcg" "-smp" "4"
@@ -74,9 +80,23 @@ def toolchain [here: path, workspace: oneof<string, nothing>]: nothing -> oneof<
     null
 }
 
-# A tool's command: <toolchain>/bin/<triple><name>, or the bare name on PATH.
-def tool [toolchain: oneof<string, nothing>, name: string]: nothing -> string {
-    if $toolchain == null { $triple + $name } else { $toolchain | path join "bin" ($triple + $name) }
+# The tools' command prefix: under a toolchain directory, `bin/<triple>`
+# for the first triple whose `as` is there; on PATH, the first triple
+# whose `as` `which` finds. Untyped because it ends in an error.
+def tool-prefix [toolchain: oneof<string, nothing>] {
+    let looked = ($triples | each {|t| $t + "as" } | str join ", ")
+    if $toolchain != null {
+        let bin = ($toolchain | path join "bin")
+        for t in $triples {
+            let prefix = ($bin | path join $t)
+            if (($prefix + "as") | path exists) { return $prefix }
+        }
+        error make {msg: $"no riscv64 binutils under ($bin): looked for ($looked)"}
+    }
+    for t in $triples {
+        if not (which ($t + "as") | is-empty) { return $t }
+    }
+    error make {msg: $"no riscv64 binutils on PATH: looked for ($looked); set RISCV_TOOLCHAIN or link extern/riscv to a toolchain"}
 }
 
 # Every file under the directories, for the staleness check.
@@ -104,12 +124,14 @@ def context [dir: path, kind: string]: nothing -> record {
     let workspace = (workspace-dir $here)
     let target = (if $workspace == null { $here | path join ".target" } else { $workspace | path join ".target" })
     let relative = (if $workspace == null { $manifest.name } else { $here | path relative-to $workspace })
+    let tc = (toolchain $here $workspace)
     {
         here: $here,
         manifest: $manifest,
         manifest_path: $manifest_path,
         workspace: $workspace,
-        toolchain: (toolchain $here $workspace),
+        toolchain: $tc,
+        prefix: (tool-prefix $tc),
         target: $target,
         out: ($target | path join $relative),
     }
@@ -144,16 +166,16 @@ def build-kernel [dir: path]: nothing -> nothing {
     let includes = ($m | get -o includes | default [])
     let include_flags = ($includes | each {|i| ["-I" $i] } | flatten)
     let debug = (if ($env.JAB_DEBUG? | default "") != "" { ["--defsym" "JAB_DEBUG=1"] } else { [] })
-    let flags = (($include_flags ++ $debug) | str join " ")
+    let flags = (($include_flags ++ $debug ++ [$c.prefix]) | str join " ")
     let elf = ($c.out | path join "jab.elf")
     let stamp = ($c.out | path join "flags")
     cd $c.here
     let inputs = ((files-under (["src"] ++ $includes)) ++ [$c.manifest_path $m.link])
     if not (stale $elf $inputs $flags $stamp) { return }
     mkdir $c.out
-    let asm = (tool $c.toolchain "as")
-    let ld = (tool $c.toolchain "ld")
-    let objdump = (tool $c.toolchain "objdump")
+    let asm = ($c.prefix + "as")
+    let ld = ($c.prefix + "ld")
+    let objdump = ($c.prefix + "objdump")
     for f in (glob src/*.S) {
         let obj = ($c.out | path join (($f | path parse | get stem) + ".o"))
         ^$asm ...$include_flags ...$debug $f -o $obj
@@ -168,16 +190,16 @@ def build-program [dir: path]: nothing -> nothing {
     let m = $c.manifest
     let includes = ($m | get -o includes | default [])
     let include_flags = ($includes | each {|i| ["-I" $i] } | flatten)
-    let flags = ($include_flags | str join " ")
+    let flags = (($include_flags ++ [$c.prefix]) | str join " ")
     let image = ($c.out | path join $"($m.name).jab")
     let stamp = ($c.out | path join "flags")
     cd $c.here
     let inputs = ((files-under (["src"] ++ $includes)) ++ [$c.manifest_path $m.link])
     if not (stale $image $inputs $flags $stamp) { return }
     mkdir $c.out
-    let asm = (tool $c.toolchain "as")
-    let ld = (tool $c.toolchain "ld")
-    let objcopy = (tool $c.toolchain "objcopy")
+    let asm = ($c.prefix + "as")
+    let ld = ($c.prefix + "ld")
+    let objcopy = ($c.prefix + "objcopy")
     let obj = ($c.out | path join $"($m.name).o")
     let elf = ($c.out | path join $"($m.name).elf")
     ^$asm ...$include_flags src/main.S -o $obj
