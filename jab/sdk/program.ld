@@ -14,7 +14,7 @@ PHDRS
 
 SECTIONS
 {
-    . = 0x80800000;
+    . = 0x80a00000;
 
     .text : { *(.text .text.*) } :code
     .rodata : { *(.rodata .rodata.*) } :code

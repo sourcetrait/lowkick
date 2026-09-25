@@ -61,3 +61,12 @@ sends over the API is in `api.out` there.
 The CPU is RVA23, `-cpu rva23s64`, which QEMU carries from 9.2; on an
 older QEMU the tool runs the generic `rv64`, which has what the kernel
 needs, and `JAB_CPU` overrides either with any `-cpu` value.
+
+The machine has 4 GiB of RAM, and a program owns nearly all of it: the
+kernel keeps the first 2 MiB and the framebuffer the 8 MiB after, and
+the window from there to the end of RAM is the program's, `sdk/jab.inc`
+naming its base, its size, and the stack top at its end. A program's
+assets ship on a romfs disk the tool builds from the directory its
+manifest names, read with `jab.romfs.*`; a PNG among them, as GIMP 3
+exports one, decodes in the kernel into a sprite with `jab.sprite.png`
+and draws with `jab.sprite.draw`, which `example/logo` shows.

@@ -216,8 +216,9 @@ gz_le32:
     ret
 
 # gz_crc32: a0 is a buffer and a1 how many bytes; a0 becomes their
-# CRC-32, the reflected one gzip and zip both use. The table is built
-# once, the first time anything asks.
+# CRC-32, the reflected one gzip, zip, and PNG all use. The table is
+# built once, the first time anything asks.
+.global gz_crc32
 gz_crc32:
     addi sp, sp, -32
     sd ra, 24(sp)

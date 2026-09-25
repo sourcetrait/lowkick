@@ -31,7 +31,10 @@ const triples = [
     "riscv64-unknown-linux-gnu-" "riscv64-linux-gnu-"
     "riscv64-unknown-elf-" "riscv64-elf-"
 ]
-const program_base = "0x80800000"
+# The window's base (jab.inc): the kernel's 2 MiB and the framebuffer's
+# 8 MiB come first, and the program has the rest of the machine's 4 GiB.
+const program_base = "0x80a00000"
+const memory = ["-m" "4G"]
 # RVA23 is the profile Jab pins, so everything it mandates is on whether
 # or not Jab itself uses it; the supervisor profile is the one carrying
 # an MMU mode and the supervisor timer the frame clock needs. RVA23 says
@@ -120,7 +123,7 @@ export def launch [
     let ports = (ports (symbols $set) $out ($api or (not ($send | is-empty))))
     let args = ([
         "--signal=TERM" $"($seconds)" "qemu-system-riscv64"
-    ] ++ (machine-args) ++ $name ++ ["-m" "128M"] ++ $display_device ++ $input_devices ++ $ports.args ++ [
+    ] ++ (machine-args) ++ $name ++ $memory ++ $display_device ++ $input_devices ++ $ports.args ++ [
         "-bios" "none" "-kernel" ($kernel | path expand)
         "-device" $"loader,file=($image | path expand),addr=($program_base),force-raw=on"
         "-display" "none" "-monitor" $"pipe:($monitor)" "-serial" $"file:($log)"
@@ -599,7 +602,7 @@ def run-program [dir: path, names: list<string>, api: bool]: nothing -> nothing 
     # the ports' files sit beside the build output, named in the README;
     # a run says nothing of its own
     let ports = (ports $c.symbols $c.out $api)
-    let args = ((machine-args) ++ $name ++ ["-m" "4G"] ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ $ports.args ++ [
+    let args = ((machine-args) ++ $name ++ $memory ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ $ports.args ++ [
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"
         "-display" $window "-serial" "stdio" "-monitor" "none"

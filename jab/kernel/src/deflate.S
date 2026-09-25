@@ -16,6 +16,12 @@
 # needs besides that lives in kernel bss, and every routine works in t
 # registers over those globals rather than holding state in callee-saved
 # ones, which keeps the whole file free of save-and-restore bookkeeping.
+#
+# The input is a segment of bytes, and a caller may give the decoder a
+# way to ask for the next one: a PNG carries its stream cut into IDAT
+# chunks, so png.S hands the decoder each chunk's data as the one before
+# runs out, and the stream is never copied together. A gzip is one
+# segment and gives no hook.
 
 .set DF_MAX_BITS, 15
 .set DF_LIT_SYMBOLS, 288
@@ -37,11 +43,27 @@
 
 # deflate_inflate: a0 is the output buffer, a1 how much it holds, a2 the
 # compressed bytes, a3 how many. a0 becomes the bytes written and a1 one
-# of the codes above.
+# of the codes above. The whole stream in one segment: deflate_begin
+# with no hook, then deflate_run.
 .global deflate_inflate
 deflate_inflate:
     addi sp, sp, -16
     sd ra, 8(sp)
+    li a4, 0
+    call deflate_begin
+    call deflate_run
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# deflate_begin: a0 is the output buffer, a1 how much it holds, a2 the
+# first segment of compressed bytes, a3 how many, a4 a hook to call when
+# a segment runs out, or 0 with none. A hook gives the decoder its next
+# segment through deflate_segment and returns 1, or returns 0 when there
+# is no more; it may use any register the decoder does not keep, which
+# is all of them.
+.global deflate_begin
+deflate_begin:
     la t0, df_out
     sd a0, 0(t0)
     la t0, df_outcap
@@ -50,6 +72,8 @@ deflate_inflate:
     sd a2, 0(t0)
     la t0, df_inlen
     sd a3, 0(t0)
+    la t0, df_more
+    sd a4, 0(t0)
     la t0, df_inpos
     sd zero, 0(t0)
     la t0, df_outpos
@@ -60,6 +84,59 @@ deflate_inflate:
     sd zero, 0(t0)
     la t0, df_error
     sd zero, 0(t0)
+    ret
+
+# deflate_segment: a0 is the next segment of compressed bytes and a1 how
+# many; what a hook calls before it returns 1.
+.global deflate_segment
+deflate_segment:
+    la t0, df_in
+    sd a0, 0(t0)
+    la t0, df_inlen
+    sd a1, 0(t0)
+    la t0, df_inpos
+    sd zero, 0(t0)
+    ret
+
+# deflate_byte: the next whole byte of the input, asking the hook for
+# more when the segment has run out. a0 becomes the byte, or -1 when
+# there is none. The bit buffer is left alone, so this reads what
+# surrounds a stream - a zlib header before it, an Adler-32 after it -
+# from the same cursor the blocks use.
+.global deflate_byte
+deflate_byte:
+    addi sp, sp, -16
+    sd ra, 8(sp)
+1:
+    la t0, df_inpos
+    ld t1, 0(t0)
+    la t2, df_inlen
+    ld t2, 0(t2)
+    bltu t1, t2, 2f
+    call df_refill
+    bnez a0, 1b
+    li a0, -1
+    j 3f
+2:
+    la t2, df_in
+    ld t2, 0(t2)
+    add t2, t2, t1
+    lbu a0, 0(t2)
+    addi t1, t1, 1
+    sd t1, 0(t0)
+3:
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# deflate_run: the blocks, from where the input cursor stands to the one
+# marked final. a0 becomes the bytes written and a1 one of the codes
+# above. Fewer than eight bits are ever left in the bit buffer at the
+# end, so the next whole byte is the first after the stream.
+.global deflate_run
+deflate_run:
+    addi sp, sp, -16
+    sd ra, 8(sp)
 1:
     li a0, 1
     call df_bits
@@ -113,6 +190,18 @@ df_fail:
 1:
     ret
 
+# df_refill: the segment has run out; ask the hook for another. a0
+# becomes 1 with a new segment in place, 0 with none. Keeps nothing, so
+# a caller saves what it holds in t registers first.
+df_refill:
+    la t0, df_more
+    ld t0, 0(t0)
+    beqz t0, 1f
+    jr t0
+1:
+    li a0, 0
+    ret
+
 # df_bits: a0 is how many bits to take, at most 16, lowest first as
 # DEFLATE writes them. a0 becomes their value, or 0 with the input
 # error set once the stream has run out.
@@ -153,10 +242,28 @@ df_bits:
     sd t3, 0(t4)
     ret
 8:
+    # the segment has run out: keep the buffer, ask for another, and go
+    # on where it left off if one came
     la t4, df_bitcnt
     sd t1, 0(t4)
     la t4, df_bitbuf
     sd t3, 0(t4)
+    la t4, df_want
+    sd t6, 0(t4)
+    addi sp, sp, -16
+    sd ra, 8(sp)
+    call df_refill
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    beqz a0, 9f
+    la t4, df_want
+    ld t6, 0(t4)
+    la t0, df_bitcnt
+    ld t1, 0(t0)
+    la t2, df_bitbuf
+    ld t3, 0(t2)
+    j 1b
+9:
     addi sp, sp, -16
     sd ra, 8(sp)
     li t0, DF_ERR_INPUT
@@ -216,19 +323,12 @@ df_stored:
     bnez t0, 9f
 1:
     beqz t3, 9f
-    la t0, df_inpos
-    ld t1, 0(t0)
-    la t2, df_inlen
-    ld t2, 0(t2)
-    bgeu t1, t2, 7f
-    la t2, df_in
-    ld t2, 0(t2)
-    add t2, t2, t1
-    lbu a0, 0(t2)
-    addi t1, t1, 1
-    sd t1, 0(t0)
     la t0, df_scratch
     sd t3, 0(t0)
+    call deflate_byte
+    la t0, df_scratch
+    ld t3, 0(t0)
+    bltz a0, 7f
     call df_put
     la t0, df_scratch
     ld t3, 0(t0)
@@ -773,6 +873,10 @@ df_last:
 df_scratch:
     .skip 8
 df_scratch2:
+    .skip 8
+df_more:
+    .skip 8
+df_want:
     .skip 8
 .balign 2
 df_lencnt:

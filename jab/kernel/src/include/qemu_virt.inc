@@ -33,8 +33,11 @@
 .set QEMU_TEST_PASS, 0x5555
 .set QEMU_TEST_FAIL, 0x3333
 
-# RAM begins here; -kernel loads the kernel at its start
+# RAM begins here; -kernel loads the kernel at its start. The machine
+# has 4 GiB of it (-m 4G on every line), the kernel's 2 MiB at the
+# bottom, the framebuffer next, and the program's window the rest.
 .set QEMU_VIRT_DRAM, 0x80000000
+.set QEMU_VIRT_DRAM_SIZE, 0x100000000
 
 # The timebase: how many times the time counter ticks a second
 .set QEMU_VIRT_TIMEBASE, 10000000

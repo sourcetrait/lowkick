@@ -1,9 +1,10 @@
-version = '0.0.0-6'
+version = '0.0.0-7'
 kernel = 'kernel'
 programs = [
   'example/helloworld',
   'example/bounce',
   'example/wasd',
+  'example/logo',
   'test/exitstatus',
   'test/badstore',
   'test/displayprint',
@@ -15,5 +16,7 @@ programs = [
   'test/gz',
   'test/checksum',
   'test/hash',
+  'test/png',
+  'test/sprite',
   'test/purity'
 ]

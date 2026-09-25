@@ -9,9 +9,9 @@
 # kernel runs, swapped on entry and exit. Frame slot n holds register n;
 # slot 2 holds the program's sp. A system call is dispatched through
 # syscall_table by its number in a7; a handler finds its arguments in
-# slots 80 on (a0 to a3), leaves its results in slots 80 and 88 (a0 and
-# a1), and jumps to trap_return.
-.set SYSCALL_LAST, JAB_SYS_API_READ
+# slots 80 on (a0 to a5), leaves its results in slots 80 on (a0, and a1
+# to a3 where a call has more), and jumps to trap_return.
+.set SYSCALL_LAST, JAB_SYS_SPRITE_DRAW
 
 .section .text
 .balign 4
@@ -295,6 +295,9 @@ syscall_table:
     .quad sys_hash
     .quad sys_api_write
     .quad sys_api_read
+    .quad sys_png_size
+    .quad sys_sprite_png
+    .quad sys_sprite_draw
 msg_bad_syscall:
     .asciz "jab: unknown system call "
 msg_bad_address:
