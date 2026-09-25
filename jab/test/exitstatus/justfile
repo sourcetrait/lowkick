@@ -33,6 +33,10 @@ kernel_elf := target / "kernel" / "jab.elf"
 
 qemu := "qemu-system-riscv64"
 program_base := "0x80800000"
+# The console window: QEMU's native window when a display server is
+# present, else a VNC server on 127.0.0.1:5930 to tunnel and view;
+# JAB_DISPLAY overrides with any -display value.
+display := env("JAB_DISPLAY", if env("DISPLAY", "") != "" { "default" } else { if env("WAYLAND_DISPLAY", "") != "" { "default" } else { "vnc=127.0.0.1:30" } })
 machine := "-machine virt -cpu rv64 -accel tcg -smp 4 -global virtio-mmio.force-legacy=false"
 devices := "-device virtio-gpu-device,xres=1920,yres=1080 -device virtio-keyboard-device -device virtio-tablet-device -device virtio-net-device,netdev=net0 -netdev user,id=net0 -device virtio-sound-device,audiodev=snd0 -audiodev none,id=snd0 -device virtio-rng-device"
 
@@ -52,11 +56,13 @@ test: build
     if not ("test/test.nu" | path exists) { error make {msg: "{{name}} has no test/test.nu"} }
     ^nu test/test.nu --kernel "{{kernel_elf}}" --image "{{image}}" --out "{{out}}"
 
-# Run with the console window and the full virtio device set, the UART on stdio
+# Run with the console window and the full virtio device set, the UART
+# on stdio; without a display server the window is a VNC server
 run: build
     if not ("{{kernel_elf}}" | path exists) { error make {msg: "no kernel at {{kernel_elf}}; build the kernel first"} }
     if not ("{{target}}/disk.img" | path exists) { ^truncate -s 64M "{{target}}/disk.img" }
-    ^{{qemu}} {{machine}} -m 4G {{devices}} -drive if=none,id=disk0,file={{target}}/disk.img,format=raw -device virtio-blk-device,drive=disk0 -bios none -kernel {{kernel_elf}} -device loader,file={{image}},addr={{program_base}},force-raw=on -display default -serial stdio -monitor none
+    if ("{{display}}" | str starts-with "vnc=") { print "no display server here: the console is a VNC server on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`" }
+    ^{{qemu}} {{machine}} -m 4G {{devices}} -drive if=none,id=disk0,file={{target}}/disk.img,format=raw -device virtio-blk-device,drive=disk0 -bios none -kernel {{kernel_elf}} -device loader,file={{image}},addr={{program_base}},force-raw=on -display {{display}} -serial stdio -monitor none
 
 clean:
     rm -rf "{{out}}"

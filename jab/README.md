@@ -18,7 +18,9 @@ runs only under QEMU's `virt` machine.
 Build and run with `just` and nushell: `just build`, `just test` (or
 `just test example`, `just test example helloworld`), `just run example
 helloworld` from here, or `just build` and `just test` inside the kernel
-or a program. The toolchain is found by its install directory, the one
+or a program. `just run` opens QEMU's own window when a display server
+is present and otherwise serves the console over VNC on 127.0.0.1:5930,
+to tunnel and view; `JAB_DISPLAY` overrides with any `-display` value. The toolchain is found by its install directory, the one
 holding `bin/`: `RISCV_TOOLCHAIN`, else an `extern/riscv` link beside the
 kernel or program, else `extern/riscv` beside this file, else the tools
 on `PATH`.
