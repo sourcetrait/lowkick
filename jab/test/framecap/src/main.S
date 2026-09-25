@@ -5,7 +5,8 @@
 # two seconds at thirty-two a second while the hart halts between them.
 # Then a rectangle reaching past the screen's edge, which the kernel
 # must refuse; then a list of two rectangles as one flip, a list with
-# one past the edge, and a list of none. Reports on the UART.
+# one past the edge, and a list of none; then what the kernel was built
+# with. Reports on the UART.
 .include "jab.inc"
 
 .set FLIPS, 64
@@ -82,6 +83,11 @@ _start:
     la a1, norects_digits
     call two_digits
     jab.uart.print norects
+    # what the kernel was built with: flags=N
+    jab.kernel.flags
+    la a1, flags_digits
+    call two_digits
+    jab.uart.print flags
     jab.uart.print paced
     jab.exit 0
 
@@ -124,6 +130,10 @@ badrects_digits:
 norects:
     .ascii "norects="
 norects_digits:
+    .asciz "00\n"
+flags:
+    .ascii "flags="
+flags_digits:
     .asciz "00\n"
 
 .section .rodata

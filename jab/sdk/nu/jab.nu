@@ -307,6 +307,16 @@ def symbols [set: string]: nothing -> list<string> {
 # A test build's symbols: whatever was asked, and DEBUG.
 def with-debug [names: list<string>]: nothing -> list<string> { $names | append "DEBUG" | uniq | sort }
 
+# The symbol the host adds to every build: DISPLAY_FLUSH_SCALED where
+# the window a run would open charges a flush by its area, SDL and GTK,
+# and nothing under cocoa, which charges every flush alike. The window
+# is JAB_DISPLAY's or the host's own, never a manifest's, so a tree
+# holds one class; `JAB_DISPLAY=cocoa` builds the other kernel on any
+# host, for measuring.
+def with-host [names: list<string>]: nothing -> list<string> {
+    if ((display {}) | str starts-with "cocoa") { $names } else { $names | append "DISPLAY_FLUSH_SCALED" | uniq | sort }
+}
+
 # Which tree a build lands in: debug with DEBUG set, else release.
 def profile [names: list<string>]: nothing -> string { if "DEBUG" in $names { "debug" } else { "release" } }
 
@@ -504,10 +514,10 @@ def kernel-elf [c: record] {
 }
 
 # The window for a run: JAB_DISPLAY, else the manifest's display, else
-# the best QEMU window the host has: gtk with OpenGL on Linux, SDL with
-# OpenGL on Windows, cocoa on macOS (its only window, and it has no
-# OpenGL). A Linux machine with no display server is nobody's console;
-# there the display goes out over VNC for development.
+# the best QEMU window the host has: SDL with OpenGL on Linux and
+# Windows, cocoa on macOS (its only window, and it has no OpenGL). A
+# Linux machine with no display server is nobody's console; there the
+# display goes out over VNC for development.
 def display [manifest: record]: nothing -> string {
     let forced = ($env.JAB_DISPLAY? | default "")
     if $forced != "" { return $forced }
@@ -518,7 +528,7 @@ def display [manifest: record]: nothing -> string {
         "windows" => "sdl,gl=on",
         _ => {
             let server = (($env.DISPLAY? | default "") != "") or (($env.WAYLAND_DISPLAY? | default "") != "")
-            if $server { "gtk,gl=on" } else { "vnc=127.0.0.1:30" }
+            if $server { "sdl,gl=on" } else { "vnc=127.0.0.1:30" }
         },
     }
 }
@@ -642,7 +652,7 @@ def run-program [dir: path, names: list<string>, api: bool]: nothing -> nothing 
 # Build the kernel and every program of the workspace at `ws`; release
 # unless --set says otherwise.
 def "main workspace build" [ws: path, --set: string = ""] {
-    workspace-build $ws (symbols $set)
+    workspace-build $ws (with-host (symbols $set))
 }
 
 # Test every program, a category, or one program, on a build with DEBUG
@@ -650,7 +660,7 @@ def "main workspace build" [ws: path, --set: string = ""] {
 # summary, exits 1 if any fails. A test that drives the API asks
 # `jab launch` for the port itself.
 def "main workspace test" [ws: path, category: string = "", name: string = "", --set: string = ""] {
-    let names = (with-debug (symbols $set))
+    let names = (with-host (with-debug (symbols $set)))
     workspace-build $ws $names
     let m = (open ($ws | path join "workspace.jab.toml"))
     let selected = ($m.programs | where {|p| ($category == "" or ($p | str starts-with $"($category)/")) and ($name == "" or ($p | path basename) == $name) })
@@ -671,7 +681,7 @@ def "main workspace test" [ws: path, category: string = "", name: string = "", -
 # release unless --set says otherwise, the API's port on the machine
 # with --api.
 def "main workspace run" [ws: path, category: string, name: string, --set: string = "", --api] {
-    let names = (symbols $set)
+    let names = (with-host (symbols $set))
     workspace-build $ws $names
     run-program ($ws | path join $category $name) $names $api
 }
@@ -679,20 +689,20 @@ def "main workspace run" [ws: path, category: string, name: string, --set: strin
 # Build the kernel at `dir` (--kernel) or the program at `dir`; release
 # unless --set says otherwise.
 def "main build" [dir: path, --kernel, --set: string = ""] {
-    let names = (symbols $set)
+    let names = (with-host (symbols $set))
     if $kernel { build-kernel $dir $names } else { build-program $dir $names }
 }
 
 # Build the program at `dir` with DEBUG set beside whatever --set names
 # and run its test/test.nu on the debug kernel.
 def "main test" [dir: path, --set: string = ""] {
-    ^nu ...(test-args (prepared $dir (with-debug (symbols $set))))
+    ^nu ...(test-args (prepared $dir (with-host (with-debug (symbols $set)))))
 }
 
 # Build the program at `dir` and run it with the console window; release
 # unless --set says otherwise, the API's port on the machine with --api.
 def "main run" [dir: path, --set: string = "", --api] {
-    run-program $dir (symbols $set) $api
+    run-program $dir (with-host (symbols $set)) $api
 }
 
 # Remove the kernel's (--kernel) or the program's build output from both

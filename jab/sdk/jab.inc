@@ -67,6 +67,19 @@
 .set JAB_SYS_SPRITE_DRAW, 28
 .set JAB_SYS_SPRITE_LOAD, 29
 .set JAB_SYS_DISPLAY_FLIP_RECTS, 30
+.set JAB_SYS_KERNEL_FLAGS, 31
+
+# What the kernel was built with, as jab.kernel.flags reports it: a
+# mask of these. JAB_KERNEL_DEBUG: DEBUG was set, so the kernel's own
+# lines go to its debug channel. JAB_KERNEL_DISPLAY_FLUSH_SCALED:
+# DISPLAY_FLUSH_SCALED was set, which the tool does where the host's
+# window charges a flush by the area it covers (SDL, GTK) and not where
+# every flush costs the same whatever its size (Cocoa); it decides how
+# jab.display.flip.rects shows a list, rectangle by rectangle, or once
+# as the one rectangle holding them all. A program can .ifdef the same
+# symbols at build, since every symbol reaches it too.
+.set JAB_KERNEL_DEBUG, 1
+.set JAB_KERNEL_DISPLAY_FLUSH_SCALED, 2
 
 # A sprite: frames of pixels in the framebuffer's own format, which the
 # program owns and jab.sprite.draw blends onto the screen. The record is
@@ -338,6 +351,13 @@
     mv a1, \count
     mv a0, \buffer
     li a7, JAB_SYS_DISPLAY_FLIP_RECTS
+    ecall
+.endm
+
+# jab.kernel.flags: a0 becomes the mask of what the kernel was built
+# with, JAB_KERNEL_DEBUG and JAB_KERNEL_DISPLAY_FLUSH_SCALED.
+.macro jab.kernel.flags
+    li a7, JAB_SYS_KERNEL_FLAGS
     ecall
 .endm
 

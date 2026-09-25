@@ -91,6 +91,34 @@ msg_banner:
     li t6, 0
     sret
 
+# sys_kernel_flags (jab.kernel.flags): a0 becomes kernel_flags.
+.global sys_kernel_flags
+sys_kernel_flags:
+    la t0, kernel_flags
+    lwu a0, 0(t0)
+    sd a0, 80(sp)
+    j trap_return
+
+# kernel_flags: the mask of what this kernel was built with, from the
+# symbols the assembler was given, JAB_KERNEL_* each. The kernel reads
+# it where a build symbol decides its behaviour at run time, so both
+# paths are in every kernel, and a program reads it by the call.
+.ifdef DEBUG
+.set KERNEL_FLAG_DEBUG, JAB_KERNEL_DEBUG
+.else
+.set KERNEL_FLAG_DEBUG, 0
+.endif
+.ifdef DISPLAY_FLUSH_SCALED
+.set KERNEL_FLAG_DISPLAY_FLUSH, JAB_KERNEL_DISPLAY_FLUSH_SCALED
+.else
+.set KERNEL_FLAG_DISPLAY_FLUSH, 0
+.endif
+.section .rodata
+.balign 4
+.global kernel_flags
+kernel_flags:
+    .4byte (KERNEL_FLAG_DEBUG | KERNEL_FLAG_DISPLAY_FLUSH)
+
 .section .bss
 .balign 16
 kernel_stack:
