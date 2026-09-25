@@ -18,14 +18,16 @@ build:
     ^just -f "{{here}}/{{kernel_dir}}/justfile" build
     for p in ("{{programs}}" | split row " ") { ^just -f ("{{here}}" | path join $p "justfile") build }
 
-# Build everything, then run every program's headless test against its
-# manifest's `expect`; prints each log and a summary, fails if any fails
-test seconds="10": build
-    let results = ("{{programs}}" | split row " " | each {|p| let r = (^just -f ("{{here}}" | path join $p "justfile") test {{seconds}} | complete); print $"--- ($p)"; print -n $r.stdout; { program: $p, passed: ($r.exit_code == 0) } }); print ($results | table); exit (if ($results | all {|r| $r.passed }) { 0 } else { 1 })
+# Build everything, then run the integration test of every program, of
+# one category (`just test example`), or of one program
+# (`just test example helloworld`); prints each test's output and a
+# summary, fails if any fails
+test category="" name="": build
+    let sel = ("{{programs}}" | split row " " | where {|p| ("{{category}}" == "" or ($p | str starts-with "{{category}}/")) and ("{{name}}" == "" or ($p | path basename) == "{{name}}") }); if ($sel | is-empty) { error make {msg: "no program matches {{category}} {{name}}"} }; let results = ($sel | each {|p| let r = (^just -f ("{{here}}" | path join $p "justfile") test | complete); print $"--- ($p)"; print -n $r.stdout; if $r.exit_code != 0 { print -n $r.stderr }; { program: $p, passed: ($r.exit_code == 0) } }); print ($results | table); exit (if ($results | all {|r| $r.passed }) { 0 } else { 1 })
 
-# Run one program by its manifest name with the console window
-run name: build
-    let p = ("{{programs}}" | split row " " | where {|p| (open ("{{here}}" | path join $p "program.jab.toml") | get name) == "{{name}}" } | first); ^just -f ("{{here}}" | path join $p "justfile") run
+# Run one program with the console window: `just run example helloworld`
+run category name: build
+    ^just -f ("{{here}}" | path join "{{category}}" "{{name}}" "justfile") run
 
 clean:
     rm -rf "{{here}}/.target"

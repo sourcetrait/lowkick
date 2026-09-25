@@ -1,7 +1,7 @@
 version = '0.0.0-1'
 kernel = 'kernel'
 programs = [
-  'prog/test/helloworld',
-  'prog/test/exitstatus',
-  'prog/test/badstore'
+  'example/helloworld',
+  'test/exitstatus',
+  'test/badstore'
 ]

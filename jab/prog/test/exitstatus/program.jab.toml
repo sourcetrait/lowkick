@@ -1,4 +1,0 @@
-name = 'exitstatus'
-includes = ['../../../sdk']
-link = '../../../sdk/program.ld'
-expect = 3

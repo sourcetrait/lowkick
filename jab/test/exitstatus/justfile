@@ -1,5 +1,6 @@
-# A Jab program. Builds src/main.S into <target>/prog/<name>/<name>.jab
-# and runs it on the kernel built at <target>/kernel/jab.elf.
+# A Jab program. Builds src/main.S into <target>/<category>/<name>/<name>.jab,
+# runs it on the kernel at <target>/kernel/jab.elf, and tests it with
+# test/test.nu.
 #
 # Lookups, in order: the workspace is the nearest parent directory
 # holding workspace.jab.toml, if any; the toolchain is RISCV_TOOLCHAIN,
@@ -25,8 +26,8 @@ target := if workspace_dir != "" { workspace_dir / ".target" } else { here / ".t
 name := shell('open "' + manifest + '" | get name | print -n $in')
 includes := shell('open "' + manifest + '" | get -o includes | default [] | each {|p| $"-I ($p)" } | str join " " | print -n $in')
 link_script := shell('open "' + manifest + '" | get link | print -n $in')
-expect := shell('open "' + manifest + '" | get -o expect | default 0 | print -n $in')
-out := target / "prog" / name
+relative := shell('let w = "' + workspace_dir + '"; if $w == "" { print -n "' + name + '" } else { "' + here + '" | path relative-to $w | print -n $in }')
+out := target / relative
 image := out / name + ".jab"
 kernel_elf := target / "kernel" / "jab.elf"
 
@@ -44,13 +45,12 @@ build:
     ^"{{link}}" -T {{link_script}} -nostdlib "{{out}}/{{name}}.o" -o "{{out}}/{{name}}.elf"
     ^"{{objcopy}}" -O binary "{{out}}/{{name}}.elf" "{{image}}"
 
-# Run headless for up to `seconds`, the UART to <out>/serial.log, and
-# compare the run's status with the manifest's `expect` (0 by default):
-# exits 0 on a match, else 1. The status is what jab.exit gave, 1 on a
-# program fault, 124 when the bound ended the run.
-test seconds="10": build
+# Build, then run test/test.nu, which launches the program on the kernel
+# and judges the run; the kernel must be built first
+test: build
     if not ("{{kernel_elf}}" | path exists) { error make {msg: "no kernel at {{kernel_elf}}; build the kernel first"} }
-    let status = (^timeout --signal=TERM {{seconds}} {{qemu}} {{machine}} -m 128M -bios none -kernel {{kernel_elf}} -device loader,file={{image}},addr={{program_base}},force-raw=on -display none -monitor none -serial file:{{out}}/serial.log | complete | get exit_code); print -n (open --raw "{{out}}/serial.log"); if $status == {{expect}} { print $"{{name}}: status ($status) as expected" } else { print $"{{name}}: status ($status), expected {{expect}}"; exit 1 }
+    if not ("test/test.nu" | path exists) { error make {msg: "{{name}} has no test/test.nu"} }
+    ^nu test/test.nu --kernel "{{kernel_elf}}" --image "{{image}}" --out "{{out}}"
 
 # Run with the console window and the full virtio device set, the UART on stdio
 run: build

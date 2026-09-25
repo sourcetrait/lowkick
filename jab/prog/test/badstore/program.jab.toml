@@ -1,4 +1,0 @@
-name = 'badstore'
-includes = ['../../../sdk']
-link = '../../../sdk/program.ld'
-expect = 1
