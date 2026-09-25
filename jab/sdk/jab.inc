@@ -36,6 +36,7 @@
 .set JAB_SYS_DISPLAY_FLIP, 6
 .set JAB_SYS_DISPLAY_PRINT, 7
 .set JAB_SYS_AWAIT, 8
+.set JAB_SYS_DISPLAY_FLIP_RECT, 9
 
 # jab.exit status: end the program. status is an immediate, 0 by default.
 .macro jab.exit status=0
@@ -82,6 +83,18 @@
 # open; 3 when the device refused it.
 .macro jab.display.flip
     li a7, JAB_SYS_DISPLAY_FLIP
+    ecall
+.endm
+
+# jab.display.flip.rect: show the rectangle the program has in a0 to
+# a3, x, y, width, height in pixels, and nothing else. What
+# jab.display.flip is, with the same codes, plus 4 when the rectangle
+# is empty or reaches outside the screen. One flip a frame, so several
+# changed areas go as the one rectangle holding them. The host copies
+# and paints only the rectangle, which is what keeps a moving object
+# cheap.
+.macro jab.display.flip.rect
+    li a7, JAB_SYS_DISPLAY_FLIP_RECT
     ecall
 .endm
 

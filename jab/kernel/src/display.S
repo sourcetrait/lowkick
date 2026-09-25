@@ -6,9 +6,10 @@
 # The display: QEMU's virtio-gpu in 2D over mmio. One resource, the
 # framebuffer at JAB_DISPLAY_BASE, is the program's to draw into; the
 # kernel attaches it as the resource's backing, sets it as scanout 0,
-# and on a flip transfers the whole of it to the host and flushes it.
-# The screen console draws text into the same framebuffer with the font
-# in font.S and transfers only the rows it touched. Commands run one at
+# and on a flip transfers the whole of it, or the rectangle the program
+# names, to the host and flushes it. The screen console draws text into
+# the same framebuffer with the font in font.S and transfers only the
+# rows it touched. Commands run one at
 # a time through the control queue; the response's type says whether
 # the device took the command.
 .set DISPLAY_RESOURCE, 1
@@ -58,8 +59,10 @@ sys_display_flip:
     call frame_ready
     beqz a0, 2f
     li a0, 0
-    li a1, JAB_DISPLAY_HEIGHT
-    call display_present_rows
+    li a1, 0
+    li a2, JAB_DISPLAY_WIDTH
+    li a3, JAB_DISPLAY_HEIGHT
+    call display_present_rect
     li a1, 3
     bnez a0, 3f
     call frame_flipped
@@ -71,6 +74,53 @@ sys_display_flip:
 3:
     mv a0, a1
 1:
+    sd a0, 80(sp)
+    j trap_return
+
+# sys_display_flip_rect (jab.display.flip.rect): show the rectangle at
+# a0, a1 of a2 by a3 pixels. a0 becomes 0; 1 when the frame is early,
+# nothing transferred; 2 when the display is not open; 3 when the
+# device refused a command; 4 when the rectangle is empty or reaches
+# outside the screen.
+.global sys_display_flip_rect
+sys_display_flip_rect:
+    la t0, display_state
+    ld t0, 0(t0)
+    li a0, 2
+    beqz t0, 9f
+    ld t1, 80(sp)
+    ld t2, 88(sp)
+    ld t3, 96(sp)
+    ld t4, 104(sp)
+    li a0, 4
+    beqz t3, 9f
+    beqz t4, 9f
+    li t6, JAB_DISPLAY_WIDTH
+    bgtu t3, t6, 9f
+    add t5, t1, t3
+    bgtu t5, t6, 9f
+    li t6, JAB_DISPLAY_HEIGHT
+    bgtu t4, t6, 9f
+    add t5, t2, t4
+    bgtu t5, t6, 9f
+    call frame_ready
+    beqz a0, 8f
+    ld a0, 80(sp)
+    ld a1, 88(sp)
+    ld a2, 96(sp)
+    ld a3, 104(sp)
+    call display_present_rect
+    li a1, 3
+    bnez a0, 7f
+    call frame_flipped
+    li a0, 0
+    j 9f
+7:
+    mv a0, a1
+    j 9f
+8:
+    li a0, 1
+9:
     sd a0, 80(sp)
     j trap_return
 
@@ -157,8 +207,10 @@ display_open:
     call gpu_set_scanout
     bnez a0, 7f
     li a0, 0
-    li a1, JAB_DISPLAY_HEIGHT
-    call display_present_rows
+    li a1, 0
+    li a2, JAB_DISPLAY_WIDTH
+    li a3, JAB_DISPLAY_HEIGHT
+    call display_present_rect
     bnez a0, 7f
     la t0, display_state
     li t1, 1
@@ -178,29 +230,36 @@ display_open:
     addi sp, sp, 16
     ret
 
-# display_present_rows: transfer rows a0 to a0 + a1 of the framebuffer
-# to the host and flush them to the screen. Returns 0, or 1 when a
-# command fails.
-.global display_present_rows
-display_present_rows:
-    addi sp, sp, -32
-    sd ra, 24(sp)
-    sd a0, 16(sp)
-    sd a1, 8(sp)
+# display_present_rect: transfer the rectangle at a0, a1 of a2 by a3
+# pixels of the framebuffer to the host and flush it to the screen.
+# Returns 0, or 1 when a command fails.
+.global display_present_rect
+display_present_rect:
+    addi sp, sp, -48
+    sd ra, 40(sp)
+    sd a0, 32(sp)
+    sd a1, 24(sp)
+    sd a2, 16(sp)
+    sd a3, 8(sp)
     li a0, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D
     call gpu_command
     la t0, gpu_cmd
-    ld t1, 16(sp)
-    ld t2, 8(sp)
-    li t3, JAB_DISPLAY_WIDTH
+    ld t1, 32(sp)
+    ld t2, 24(sp)
+    ld t3, 16(sp)
+    ld t4, 8(sp)
+    sw t1, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_X)(t0)
+    sw t2, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_Y)(t0)
     sw t3, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_WIDTH)(t0)
-    sw t1, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_Y)(t0)
-    sw t2, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_HEIGHT)(t0)
-    li t3, JAB_DISPLAY_PITCH
-    mul t3, t3, t1
-    sd t3, VIRTIO_GPU_TRANSFER_OFFSET(t0)
-    li t3, DISPLAY_RESOURCE
-    sw t3, VIRTIO_GPU_TRANSFER_RESOURCE_ID(t0)
+    sw t4, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_HEIGHT)(t0)
+    # the byte offset of the rectangle's top left in the framebuffer
+    li t5, JAB_DISPLAY_PITCH
+    mul t5, t5, t2
+    slli t6, t1, 2
+    add t5, t5, t6
+    sd t5, VIRTIO_GPU_TRANSFER_OFFSET(t0)
+    li t5, DISPLAY_RESOURCE
+    sw t5, VIRTIO_GPU_TRANSFER_RESOURCE_ID(t0)
     li a0, VIRTIO_GPU_TRANSFER_SIZE
     li a1, VIRTIO_GPU_RESP_OK_NODATA
     call gpu_submit
@@ -208,20 +267,22 @@ display_present_rows:
     li a0, VIRTIO_GPU_CMD_RESOURCE_FLUSH
     call gpu_command
     la t0, gpu_cmd
-    ld t1, 16(sp)
-    ld t2, 8(sp)
-    li t3, JAB_DISPLAY_WIDTH
+    ld t1, 32(sp)
+    ld t2, 24(sp)
+    ld t3, 16(sp)
+    ld t4, 8(sp)
+    sw t1, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_X)(t0)
+    sw t2, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_Y)(t0)
     sw t3, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_WIDTH)(t0)
-    sw t1, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_Y)(t0)
-    sw t2, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_HEIGHT)(t0)
-    li t3, DISPLAY_RESOURCE
-    sw t3, VIRTIO_GPU_FLUSH_RESOURCE_ID(t0)
+    sw t4, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_HEIGHT)(t0)
+    li t5, DISPLAY_RESOURCE
+    sw t5, VIRTIO_GPU_FLUSH_RESOURCE_ID(t0)
     li a0, VIRTIO_GPU_FLUSH_SIZE
     li a1, VIRTIO_GPU_RESP_OK_NODATA
     call gpu_submit
 1:
-    ld ra, 24(sp)
-    addi sp, sp, 32
+    ld ra, 40(sp)
+    addi sp, sp, 48
     ret
 
 # gpu_get_display_info: ask what the display is; with JAB_DEBUG the
@@ -463,9 +524,11 @@ console_write:
     j 1b
 9:
     bgeu s2, s3, 10f
-    mv a0, s2
-    sub a1, s3, s2
-    call display_present_rows
+    li a0, 0
+    mv a1, s2
+    li a2, JAB_DISPLAY_WIDTH
+    sub a3, s3, s2
+    call display_present_rect
 10:
     ld ra, 40(sp)
     ld s0, 32(sp)

@@ -1,7 +1,8 @@
 # bounce: a ball bouncing around the display, Jab's display example.
-# Opens the display, paints the background once, then each frame waits
-# for the tick, erases the ball, moves it, draws it, and flips. Runs
-# until the window closes.
+# Opens the display, paints the background once and flips it whole,
+# then each frame waits for the tick, erases the ball, moves it, draws
+# it, and flips the one rectangle holding where it was and where it
+# is. Runs until the window closes.
 .include "jab.inc"
 
 .set RADIUS, 90
@@ -28,6 +29,9 @@ _start:
     sd t2, 0(t0)
     addi t0, t0, 8
     bltu t0, t1, 1b
+    # the whole screen once, since every flip after is the ball's
+    # rectangle alone
+    jab.display.flip
     # the ball's centre, and its speed in pixels per frame
     li s0, 200
     li s1, 200
@@ -39,6 +43,9 @@ frame:
     mv a1, s1
     li a2, BACKGROUND
     call fill_square
+    # where it was, then where it goes
+    mv s4, s0
+    mv s5, s1
     add s0, s0, s2
     add s1, s1, s3
     li t0, LEFT
@@ -64,7 +71,31 @@ frame:
     mv a0, s0
     mv a1, s1
     call draw_ball
-    jab.display.flip
+    # the rectangle holding the old square and the new: from the lesser
+    # centre less the radius to the greater plus it, inclusive
+    mv a0, s0
+    bge s4, s0, 5f
+    mv a0, s4
+5:
+    addi a0, a0, -RADIUS
+    mv a2, s0
+    ble s4, s0, 6f
+    mv a2, s4
+6:
+    addi a2, a2, RADIUS + 1
+    sub a2, a2, a0
+    mv a1, s1
+    bge s5, s1, 7f
+    mv a1, s5
+7:
+    addi a1, a1, -RADIUS
+    mv a3, s1
+    ble s5, s1, 8f
+    mv a3, s5
+8:
+    addi a3, a3, RADIUS + 1
+    sub a3, a3, a1
+    jab.display.flip.rect
     j frame
 
 no_display:

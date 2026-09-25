@@ -25,6 +25,9 @@ const machine = [
     "-machine" "virt" "-cpu" "rv64" "-accel" "tcg" "-smp" "4"
     "-global" "virtio-mmio.force-legacy=false"
 ]
+# The process is named, and so are its threads (CPU 0/TCG and the
+# rest), so a per-thread listing reads.
+const name = ["-name" "jab,debug-threads=on"]
 const display_device = ["-device" "virtio-gpu-device,xres=1920,yres=1080"]
 const devices = [
     "-device" "virtio-keyboard-device"
@@ -61,7 +64,7 @@ export def launch [
     ^mkfifo ($monitor + ".in") ($monitor + ".out")
     let args = ([
         "--signal=TERM" $"($seconds)" "qemu-system-riscv64"
-    ] ++ $machine ++ ["-m" "128M"] ++ $display_device ++ [
+    ] ++ $machine ++ $name ++ ["-m" "128M"] ++ $display_device ++ [
         "-bios" "none" "-kernel" ($kernel | path expand)
         "-device" $"loader,file=($image | path expand),addr=($program_base),force-raw=on"
         "-display" "none" "-monitor" $"pipe:($monitor)" "-serial" $"file:($log)"
@@ -268,14 +271,23 @@ def kernel-elf [c: record] {
 }
 
 # The window for a run: JAB_DISPLAY, else the manifest's display, else
-# QEMU's own window with a display server, else a VNC server.
+# the best QEMU window the host has: gtk with OpenGL on Linux, SDL with
+# OpenGL on Windows, cocoa on macOS (its only window, and it has no
+# OpenGL). A Linux machine with no display server is nobody's console;
+# there the display goes out over VNC for development.
 def display [manifest: record]: nothing -> string {
     let forced = ($env.JAB_DISPLAY? | default "")
     if $forced != "" { return $forced }
     let declared = ($manifest | get -o display | default "")
     if $declared != "" { return $declared }
-    let server = (($env.DISPLAY? | default "") != "") or (($env.WAYLAND_DISPLAY? | default "") != "")
-    if $server { "default" } else { "vnc=127.0.0.1:30" }
+    match $nu.os-info.name {
+        "macos" => "cocoa",
+        "windows" => "sdl,gl=on",
+        _ => {
+            let server = (($env.DISPLAY? | default "") != "") or (($env.WAYLAND_DISPLAY? | default "") != "")
+            if $server { "gtk,gl=on" } else { "vnc=127.0.0.1:30" }
+        },
+    }
 }
 
 def build-kernel [dir: path]: nothing -> nothing {
@@ -392,9 +404,9 @@ def "main run" [dir: path] {
     if not ($disk | path exists) { ^truncate -s 64M $disk }
     let window = (display $c.manifest)
     if ($window | str starts-with "vnc=") {
-        print "no display server here: the console is a VNC server on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
+        print "no display server here, so this is a development run: the display is served over VNC on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
     }
-    let args = ($machine ++ ["-m" "4G"] ++ $display_device ++ $devices ++ [
+    let args = ($machine ++ $name ++ ["-m" "4G"] ++ $display_device ++ $devices ++ [
         "-drive" $"if=none,id=disk0,file=($disk),format=raw" "-device" "virtio-blk-device,drive=disk0"
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"

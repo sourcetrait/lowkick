@@ -1,8 +1,10 @@
 # framecap: the frame cap. Sixty-four flips in a row with no waiting:
 # the first goes through and the rest come too early, which the kernel
 # refuses without showing them. Then sixty-four frames the proper way,
-# await then flip, which take two seconds at thirty-two a second while
-# the hart halts between them. Reports the refusals on the UART.
+# await then flip, half of them whole and half a rectangle, which take
+# two seconds at thirty-two a second while the hart halts between them.
+# Then a rectangle reaching past the screen's edge, which the kernel
+# must refuse. Reports on the UART.
 .include "jab.inc"
 
 .set FLIPS, 64
@@ -23,22 +25,40 @@ _start:
     addi s1, s1, -1
     bnez s1, 1b
     # refused=NN
-    la t0, digits
-    li t1, 10
-    divu t2, s0, t1
-    remu t3, s0, t1
-    addi t2, t2, '0'
-    addi t3, t3, '0'
-    sb t2, 0(t0)
-    sb t3, 1(t0)
+    mv a0, s0
+    la a1, refused_digits
+    call two_digits
     jab.uart.print refused
-    li s1, FLIPS
+    # thirty-two whole frames, awaited
+    li s1, FLIPS / 2
 3:
     jab.display.await
     jab.display.flip
     bnez a0, flip_failed
     addi s1, s1, -1
     bnez s1, 3b
+    # thirty-two rectangles, awaited
+    li s1, FLIPS / 2
+4:
+    jab.display.await
+    li a0, 100
+    li a1, 100
+    li a2, 50
+    li a3, 50
+    jab.display.flip.rect
+    bnez a0, flip_failed
+    addi s1, s1, -1
+    bnez s1, 4b
+    # a rectangle past the right edge: badrect=N
+    jab.display.await
+    li a0, 1900
+    li a1, 0
+    li a2, 100
+    li a3, 10
+    jab.display.flip.rect
+    la a1, badrect_digits
+    call two_digits
+    jab.uart.print badrect
     jab.uart.print paced
     jab.exit 0
 
@@ -50,10 +70,25 @@ flip_failed:
     jab.uart.print msg_flip_failed
     jab.exit 2
 
+# two_digits: write a0, under a hundred, as two decimal digits at a1.
+two_digits:
+    li t1, 10
+    divu t2, a0, t1
+    remu t3, a0, t1
+    addi t2, t2, '0'
+    addi t3, t3, '0'
+    sb t2, 0(a1)
+    sb t3, 1(a1)
+    ret
+
 .section .data
 refused:
     .ascii "refused="
-digits:
+refused_digits:
+    .asciz "00\n"
+badrect:
+    .ascii "badrect="
+badrect_digits:
     .asciz "00\n"
 
 .section .rodata
