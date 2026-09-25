@@ -5,8 +5,8 @@
 use ../../../sdk/nu/jab.nu
 use std/assert
 
-def main [--kernel: path, --image: path, --out: path] {
-    let run = (jab launch --kernel $kernel --image $image --out $out --keys [[at, key, hold]; [1sec, "w", 100], [2sec, "spc", 100]])
+def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
+    let run = (jab launch --kernel $kernel --image $image --out $out --set $set --keys [[at, key, hold]; [1sec, "w", 100], [2sec, "spc", 100]])
     assert equal $run.status 0 $"exit status, with the UART: ($run.serial)"
     assert equal (open --raw $run.qemu_log) "" "QEMU has no complaint about the guest"
     assert equal $run.serial "keys: ready\nkey 017 1\nkey 017 0\nkey 057 1\nkey 057 0\n" "W then the space bar, pressed and released"

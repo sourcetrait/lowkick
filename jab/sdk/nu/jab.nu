@@ -10,9 +10,17 @@
 # toolchain (RISCV_TOOLCHAIN, else extern/riscv beside the kernel or
 # program, else the workspace's, else the tools on PATH, under the
 # official triple or a distribution's name), the target (.target in the
-# workspace, else beside the kernel or program), and the manifests. A
-# build is skipped when its output is newer than every input and the
-# flags match the last build.
+# workspace, else beside the kernel or program), and the manifests.
+#
+# A build is described by its symbols: `--set debug,data` names them,
+# comma separated, in any case, and each reaches the assembler as
+# `--defsym NAME=1` for `.ifdef NAME` to read, in the kernel and the
+# programs alike. DEBUG picks the debug tree, .target/debug, and every
+# other build lands in .target/release, so the two coexist. `test`
+# always sets DEBUG, so a program's own debug reporting is there for its
+# test; `run` and `build` are release unless asked otherwise. A build is
+# skipped when its output is newer than every input and the flags,
+# symbols included, match the last build.
 
 # The riscv64 binutils prefixes: the official toolchain's triple first,
 # then the names distributions package the tools under.
@@ -52,7 +60,9 @@ const devices = [
 # gave, 1 on a program fault, 124 when the bound ended the run. With
 # `capture`, the screen is taken into screen.ppm that long after the
 # start and the run is then ended (status 0); with `keys`, each key is
-# pressed through the monitor that long after the start. QEMU's own
+# pressed through the monitor that long after the start. `set` names the
+# symbols the kernel was built with: DEBUG puts the kernel's debug
+# channel on the machine, whose text comes back as `debug`. QEMU's own
 # complaints about the guest go to qemu.log; cpu_seconds is the QEMU
 # process's CPU time over the run and wall_seconds the run's length.
 export def launch [
@@ -64,7 +74,8 @@ export def launch [
     --keys: table<at: duration, key: string, hold: int> = [] # keys to press that long after the start, QEMU's names, held for hold ms
     --disk: path = ""          # a raw image to put on the machine as the one virtio-blk disk
     --serial: string = "disk0" # the disk's serial, which the guest reads back as its own; 19 characters at most
-]: nothing -> record<status: int, serial: string, screen: string, qemu_log: string, cpu_seconds: float, wall_seconds: float> {
+    --set: string = ""         # the symbols the kernel was built with, comma separated
+]: nothing -> record<status: int, serial: string, debug: string, screen: string, qemu_log: string, cpu_seconds: float, wall_seconds: float> {
     let out = ($out | path expand)
     mkdir $out
     let log = ($out | path join "serial.log")
@@ -72,13 +83,14 @@ export def launch [
     let screen = ($out | path join "screen.ppm")
     let pidfile = ($out | path join "qemu.pid")
     let monitor = ($out | path join "monitor")
-    for f in [$log $qemu_log $screen $pidfile ($monitor + ".in") ($monitor + ".out")] {
+    let ports = (port-args (symbols $set) $out)
+    for f in ([$log $qemu_log $screen $pidfile ($monitor + ".in") ($monitor + ".out")] ++ (if $ports.debug_log == "" { [] } else { [$ports.debug_log] })) {
         if ($f | path exists) { rm $f }
     }
     ^mkfifo ($monitor + ".in") ($monitor + ".out")
     let args = ([
         "--signal=TERM" $"($seconds)" "qemu-system-riscv64"
-    ] ++ $machine ++ $name ++ ["-m" "128M"] ++ $display_device ++ $input_devices ++ [
+    ] ++ $machine ++ $name ++ ["-m" "128M"] ++ $display_device ++ $input_devices ++ $ports.args ++ [
         "-bios" "none" "-kernel" ($kernel | path expand)
         "-device" $"loader,file=($image | path expand),addr=($program_base),force-raw=on"
         "-display" "none" "-monitor" $"pipe:($monitor)" "-serial" $"file:($log)"
@@ -114,6 +126,7 @@ export def launch [
     {
         status: $result.exit_code,
         serial: (if ($log | path exists) { open --raw $log | decode } else { "" }),
+        debug: (if $ports.debug_log != "" and ($ports.debug_log | path exists) { open --raw $ports.debug_log | decode } else { "" }),
         screen: (if ($screen | path exists) { $screen } else { "" }),
         qemu_log: $qemu_log,
         cpu_seconds: $cpu,
@@ -169,6 +182,18 @@ export def thumbnail [screen: record<width: int, height: int, pixels: binary>, -
     } | str join "\n"
 }
 
+# The strings in a binary that start with `prefix`, each read to its
+# terminator: how a test asks a kernel image what text it carries.
+export def strings [path: path, prefix: string]: nothing -> list<string> {
+    let bytes = (open --raw ($path | path expand) | into binary)
+    let total = ($bytes | bytes length)
+    $bytes | bytes index-of --all ($prefix | into binary) | each {|at|
+        let tail = ($bytes | bytes at $at..<([($at + 256) $total] | math min))
+        let end = ($tail | bytes index-of 0x[00])
+        (if $end < 0 { $tail } else { $tail | bytes at 0..<$end }) | decode
+    }
+}
+
 # The QEMU arguments that put a raw image on the machine as its one
 # virtio-blk disk, or nothing at all when there is no image. The serial
 # is what the guest reads back with jab.block.list, so it is how a
@@ -180,6 +205,49 @@ def disk-args [disk: path, serial: string]: nothing -> list<string> {
         "-device" $"virtio-blk-device,drive=disk0,serial=($serial)"
     ]
 }
+
+# The channels a build symbol turns on, each a port of one
+# virtio-serial-device: DEBUG puts the kernel's debug channel on port 1
+# with the host's end a file, debug.log in `out`. Nothing at all for a
+# release build, so its machine carries no serial device. The console
+# keeps the UART in every build, since a fault line has to reach the
+# host when a port has not come up.
+def port-args [names: list<string>, out: path]: nothing -> record<args: list<string>, debug_log: string> {
+    if not ("DEBUG" in $names) { return { args: [], debug_log: "" } }
+    let log = ($out | path join "debug.log")
+    {
+        args: [
+            "-device" "virtio-serial-device"
+            "-chardev" $"file,id=jabdebug,path=($log)"
+            "-device" "virtserialport,chardev=jabdebug,nr=1,name=jab.debug"
+        ],
+        debug_log: $log,
+    }
+}
+
+# The build symbols named by `--set`: comma separated, in any case,
+# each made screaming snake case (debug, Debug and some-thing become
+# DEBUG and SOME_THING), sorted so order cannot matter, and refused when
+# the assembler would not take the name, which it would only say much
+# later.
+def symbols [set: string]: nothing -> list<string> {
+    let names = ($set | split row "," | each {|s| $s | str trim } | where {|s| $s != "" } | each {|s| $s | str screaming-snake-case } | uniq | sort)
+    for n in $names {
+        if not ($n =~ '^[A-Z_][A-Z0-9_]*$') {
+            error make {msg: $"--set ($n): not a symbol the assembler takes; a name starts with a letter"}
+        }
+    }
+    $names
+}
+
+# A test build's symbols: whatever was asked, and DEBUG.
+def with-debug [names: list<string>]: nothing -> list<string> { $names | append "DEBUG" | uniq | sort }
+
+# Which tree a build lands in: debug with DEBUG set, else release.
+def profile [names: list<string>]: nothing -> string { if "DEBUG" in $names { "debug" } else { "release" } }
+
+# The symbols as the assembler takes them.
+def defsyms [names: list<string>]: nothing -> list<string> { $names | each {|n| ["--defsym" $"($n)=1"] } | flatten }
 
 # A program's assets as a romfs image, built when the directory it names
 # has moved on: `assets` in its manifest, relative to the manifest, with
@@ -309,15 +377,17 @@ def stale [output: path, inputs: list<string>, flags: string, stamp: path]: noth
     (ls -D $output | get 0.modified) <= $newest
 }
 
-# The kernel's or a program's context: manifest, workspace, toolchain,
-# target, and output directory (the workspace-relative path under the
-# target, or the name when standalone).
-def context [dir: path, kind: string]: nothing -> record {
+# The kernel's or a program's context for a build with `names` set:
+# manifest, workspace, toolchain, symbols, the target tree (.target's
+# debug or release), and the output directory (the workspace-relative
+# path under the tree, or the name when standalone).
+def context [dir: path, kind: string, names: list<string>]: nothing -> record {
     let here = ($dir | path expand)
     let manifest_path = ($here | path join $"($kind).jab.toml")
     let manifest = (open $manifest_path)
     let workspace = (workspace-dir $here)
-    let target = (if $workspace == null { $here | path join ".target" } else { $workspace | path join ".target" })
+    let tree = (profile $names)
+    let target = (if $workspace == null { $here | path join ".target" $tree } else { $workspace | path join ".target" $tree })
     let relative = (if $workspace == null { $manifest.name } else { $here | path relative-to $workspace })
     let tc = (toolchain $here $workspace)
     {
@@ -327,13 +397,16 @@ def context [dir: path, kind: string]: nothing -> record {
         workspace: $workspace,
         toolchain: $tc,
         prefix: (tool-prefix $tc),
+        symbols: $names,
+        profile: $tree,
         target: $target,
         out: ($target | path join $relative),
     }
 }
 
-# The kernel ELF a program runs on: the workspace's, or JAB_KERNEL. Left
-# untyped because it ends in an error, which the output check rejects.
+# The kernel ELF a program runs on: the workspace's, in the same tree,
+# or JAB_KERNEL. Left untyped because it ends in an error, which the
+# output check rejects.
 def kernel-elf [c: record] {
     if $c.workspace != null {
         let ws = (open ($c.workspace | path join "workspace.jab.toml"))
@@ -364,13 +437,13 @@ def display [manifest: record]: nothing -> string {
     }
 }
 
-def build-kernel [dir: path]: nothing -> nothing {
-    let c = (context $dir "kernel")
+def build-kernel [dir: path, names: list<string>]: nothing -> nothing {
+    let c = (context $dir "kernel" $names)
     let m = $c.manifest
     let includes = ($m | get -o includes | default [])
     let include_flags = ($includes | each {|i| ["-I" $i] } | flatten)
-    let debug = (if ($env.JAB_DEBUG? | default "") != "" { ["--defsym" "JAB_DEBUG=1"] } else { [] })
-    let flags = (($include_flags ++ $debug ++ [$c.prefix]) | str join " ")
+    let set_flags = (defsyms $names)
+    let flags = (($include_flags ++ $set_flags ++ [$c.prefix]) | str join " ")
     let elf = ($c.out | path join "jab.elf")
     let stamp = ($c.out | path join "flags")
     cd $c.here
@@ -382,19 +455,20 @@ def build-kernel [dir: path]: nothing -> nothing {
     let objdump = ($c.prefix + "objdump")
     for f in (glob src/*.S) {
         let obj = ($c.out | path join (($f | path parse | get stem) + ".o"))
-        ^$asm ...$include_flags ...$debug $f -o $obj
+        ^$asm ...$include_flags ...$set_flags $f -o $obj
     }
     ^$ld -T $m.link -nostdlib ...(glob ($c.out | path join "*.o")) -o $elf
     ^$objdump -d $elf | save -f ($c.out | path join "jab.disas")
     $flags | save -f $stamp
 }
 
-def build-program [dir: path]: nothing -> nothing {
-    let c = (context $dir "program")
+def build-program [dir: path, names: list<string>]: nothing -> nothing {
+    let c = (context $dir "program" $names)
     let m = $c.manifest
     let includes = ($m | get -o includes | default [])
     let include_flags = ($includes | each {|i| ["-I" $i] } | flatten)
-    let flags = (($include_flags ++ [$c.prefix]) | str join " ")
+    let set_flags = (defsyms $names)
+    let flags = (($include_flags ++ $set_flags ++ [$c.prefix]) | str join " ")
     let image = ($c.out | path join $"($m.name).jab")
     let stamp = ($c.out | path join "flags")
     cd $c.here
@@ -406,83 +480,48 @@ def build-program [dir: path]: nothing -> nothing {
     let objcopy = ($c.prefix + "objcopy")
     let obj = ($c.out | path join $"($m.name).o")
     let elf = ($c.out | path join $"($m.name).elf")
-    ^$asm ...$include_flags src/main.S -o $obj
+    ^$asm ...$include_flags ...$set_flags src/main.S -o $obj
     ^$ld -T $m.link -nostdlib $obj -o $elf
     ^$objcopy -O binary $elf $image
     $flags | save -f $stamp
 }
 
-# What a program's test or run needs, after building it.
-def prepared [dir: path]: nothing -> record {
-    build-program $dir
-    let c = (context $dir "program")
+# What a program's test or run needs, after building it with `names`
+# set: the kernel in the same tree, so a debug program runs on a debug
+# kernel.
+def prepared [dir: path, names: list<string>]: nothing -> record {
+    build-program $dir $names
+    let c = (context $dir "program" $names)
     let kernel = (kernel-elf $c)
-    if not ($kernel | path exists) { error make {msg: $"no kernel at ($kernel); build the kernel first"} }
+    if not ($kernel | path exists) { error make {msg: $"no kernel at ($kernel); build the kernel first, with the same --set"} }
     { context: $c, kernel: $kernel, image: ($c.out | path join $"($c.manifest.name).jab") }
 }
 
-# Build the kernel and every program of the workspace at `ws`.
-def "main workspace build" [ws: path] {
+# Build the kernel and every program of the workspace at `ws` with
+# `names` set.
+def workspace-build [ws: path, names: list<string>]: nothing -> nothing {
     let m = (open ($ws | path join "workspace.jab.toml"))
-    build-kernel ($ws | path join $m.kernel)
-    for p in $m.programs { build-program ($ws | path join $p) }
+    build-kernel ($ws | path join $m.kernel) $names
+    for p in $m.programs { build-program ($ws | path join $p) $names }
 }
 
-# Test every program, a category, or one program; prints each test's
-# output and a summary, exits 1 if any fails.
-def "main workspace test" [ws: path, category: string = "", name: string = ""] {
-    main workspace build $ws
-    let m = (open ($ws | path join "workspace.jab.toml"))
-    let selected = ($m.programs | where {|p| ($category == "" or ($p | str starts-with $"($category)/")) and ($name == "" or ($p | path basename) == $name) })
-    if ($selected | is-empty) { error make {msg: $"no program matches ($category) ($name)"} }
-    let results = ($selected | each {|p|
-        let ready = (prepared ($ws | path join $p))
-        let script = ($ready.context.here | path join "test" "test.nu")
-        if not ($script | path exists) { error make {msg: $"($p) has no test/test.nu"} }
-        let assets = (assets-image $ready.context)
-        let r = (if $assets == "" {
-            ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out | complete
-        } else {
-            ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out --assets $assets | complete
-        })
-        print $"--- ($p)"
-        print -n $r.stdout
-        if $r.exit_code != 0 { print -n $r.stderr }
-        { program: $p, passed: ($r.exit_code == 0) }
-    })
-    print ($results | table)
-    if not ($results | all {|r| $r.passed }) { exit 1 }
-}
-
-# Build everything, then run one program with the console window.
-def "main workspace run" [ws: path, category: string, name: string] {
-    main workspace build $ws
-    main run ($ws | path join $category $name)
-}
-
-# Build the kernel at `dir` (--kernel) or the program at `dir`.
-def "main build" [dir: path, --kernel] {
-    if $kernel { build-kernel $dir } else { build-program $dir }
-}
-
-# Build the program at `dir` and run its test/test.nu on the kernel.
-def "main test" [dir: path] {
-    let ready = (prepared $dir)
+# The arguments that run a program's test/test.nu on the kernel: the
+# kernel, the image, the output directory, the assets image when the
+# program has one, and the symbols the build was made with.
+def test-args [ready: record]: nothing -> list<string> {
     let script = ($ready.context.here | path join "test" "test.nu")
     if not ($script | path exists) { error make {msg: $"($ready.context.manifest.name) has no test/test.nu"} }
     let assets = (assets-image $ready.context)
-    if $assets == "" {
-        ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out
-    } else {
-        ^nu $script --kernel $ready.kernel --image $ready.image --out $ready.context.out --assets $assets
-    }
+    let set = ($ready.context.symbols | str join ",")
+    let common = [$script "--kernel" $ready.kernel "--image" $ready.image "--out" $ready.context.out "--set" $set]
+    if $assets == "" { $common } else { $common ++ ["--assets" $assets] }
 }
 
-# Build the program at `dir` and run it with the console window and the
-# full virtio device set, the UART on stdio; QEMU's exit code is the
-# program's exit status.
-def "main run" [dir: path] {
-    let ready = (prepared $dir)
+# Run a program with the console window and the full virtio device set,
+# the UART on stdio, and the debug channel to a file when DEBUG is set;
+# QEMU's exit code is the program's exit status.
+def run-program [dir: path, names: list<string>]: nothing -> nothing {
+    let ready = (prepared $dir $names)
     let c = $ready.context
     # a program's own assets when it has them, else the blank image that
     # has always been there, so the machine always carries one disk
@@ -497,7 +536,12 @@ def "main run" [dir: path] {
     if ($window | str starts-with "vnc=") {
         print "no display server here, so this is a development run: the display is served over VNC on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
     }
-    let args = ($machine ++ $name ++ ["-m" "4G"] ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ [
+    let ports = (port-args $names $c.out)
+    if $ports.debug_log != "" {
+        if ($ports.debug_log | path exists) { rm $ports.debug_log }
+        print $"the kernel's debug channel goes to ($ports.debug_log)"
+    }
+    let args = ($machine ++ $name ++ ["-m" "4G"] ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ $ports.args ++ [
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"
         "-display" $window "-serial" "stdio" "-monitor" "none"
@@ -505,12 +549,69 @@ def "main run" [dir: path] {
     ^qemu-system-riscv64 ...$args
 }
 
-# Remove the kernel's (--kernel) or the program's build output.
+# Build the kernel and every program of the workspace at `ws`; release
+# unless --set says otherwise.
+def "main workspace build" [ws: path, --set: string = ""] {
+    workspace-build $ws (symbols $set)
+}
+
+# Test every program, a category, or one program, on a build with DEBUG
+# set beside whatever --set names; prints each test's output and a
+# summary, exits 1 if any fails.
+def "main workspace test" [ws: path, category: string = "", name: string = "", --set: string = ""] {
+    let names = (with-debug (symbols $set))
+    workspace-build $ws $names
+    let m = (open ($ws | path join "workspace.jab.toml"))
+    let selected = ($m.programs | where {|p| ($category == "" or ($p | str starts-with $"($category)/")) and ($name == "" or ($p | path basename) == $name) })
+    if ($selected | is-empty) { error make {msg: $"no program matches ($category) ($name)"} }
+    let results = ($selected | each {|p|
+        let ready = (prepared ($ws | path join $p) $names)
+        let r = (^nu ...(test-args $ready) | complete)
+        print $"--- ($p)"
+        print -n $r.stdout
+        if $r.exit_code != 0 { print -n $r.stderr }
+        { program: $p, passed: ($r.exit_code == 0) }
+    })
+    print ($results | table)
+    if not ($results | all {|r| $r.passed }) { exit 1 }
+}
+
+# Build everything, then run one program with the console window;
+# release unless --set says otherwise.
+def "main workspace run" [ws: path, category: string, name: string, --set: string = ""] {
+    let names = (symbols $set)
+    workspace-build $ws $names
+    run-program ($ws | path join $category $name) $names
+}
+
+# Build the kernel at `dir` (--kernel) or the program at `dir`; release
+# unless --set says otherwise.
+def "main build" [dir: path, --kernel, --set: string = ""] {
+    let names = (symbols $set)
+    if $kernel { build-kernel $dir $names } else { build-program $dir $names }
+}
+
+# Build the program at `dir` with DEBUG set beside whatever --set names
+# and run its test/test.nu on the debug kernel.
+def "main test" [dir: path, --set: string = ""] {
+    ^nu ...(test-args (prepared $dir (with-debug (symbols $set))))
+}
+
+# Build the program at `dir` and run it with the console window; release
+# unless --set says otherwise.
+def "main run" [dir: path, --set: string = ""] {
+    run-program $dir (symbols $set)
+}
+
+# Remove the kernel's (--kernel) or the program's build output from both
+# trees.
 def "main clean" [dir: path, --kernel] {
-    let c = (context $dir (if $kernel { "kernel" } else { "program" }))
-    if ($c.out | path exists) { rm -r $c.out }
+    for names in [[] ["DEBUG"]] {
+        let c = (context $dir (if $kernel { "kernel" } else { "program" }) $names)
+        if ($c.out | path exists) { rm -r $c.out }
+    }
 }
 
 def main [] {
-    print "nu jab.nu <build|test|run|clean> <dir> [--kernel]; nu jab.nu workspace <build|test|run> <ws> [category [name]]"
+    print "nu jab.nu <build|test|run|clean> <dir> [--kernel] [--set names]; nu jab.nu workspace <build|test|run> <ws> [category [name]] [--set names]"
 }

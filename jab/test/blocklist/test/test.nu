@@ -5,11 +5,11 @@
 use ../../../sdk/nu/jab.nu
 use std/assert
 
-def main [--kernel: path, --image: path, --out: path, --assets: path] {
+def main [--kernel: path, --image: path, --out: path, --assets: path, --set: string = ""] {
     assert (($assets | path exists)) "the sdk built the assets image"
     let bytes = (ls -D $assets | get 0.size | into int)
     let sectors = ($bytes // 512)
-    let run = (jab launch --kernel $kernel --image $image --out $out --disk $assets --serial "blocklist")
+    let run = (jab launch --kernel $kernel --image $image --out $out --set $set --disk $assets --serial "blocklist")
     assert equal $run.status 0 $"exit status, with the UART: ($run.serial)"
     assert equal (open --raw $run.qemu_log) "" "QEMU has no complaint about the guest"
     let lines = ($run.serial | lines)

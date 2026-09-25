@@ -39,16 +39,20 @@ virtio_find:
 
 # virtio_init: reset the device at a0, acknowledge it, claim it, offer
 # VIRTIO_F_VERSION_1 and nothing else, and confirm the features. Returns
-# 0, or 1 when the device refuses them.
+# 0, or 1 when the device refuses them. virtio_init_with offers the
+# device's own feature bits in a1 as well, the low word of its features.
 .global virtio_init
+.global virtio_init_with
 virtio_init:
+    li a1, 0
+virtio_init_with:
     sw zero, VIRTIO_MMIO_STATUS(a0)
     li t0, VIRTIO_STATUS_ACKNOWLEDGE
     sw t0, VIRTIO_MMIO_STATUS(a0)
     li t0, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER
     sw t0, VIRTIO_MMIO_STATUS(a0)
     sw zero, VIRTIO_MMIO_DRIVER_FEATURES_SEL(a0)
-    sw zero, VIRTIO_MMIO_DRIVER_FEATURES(a0)
+    sw a1, VIRTIO_MMIO_DRIVER_FEATURES(a0)
     li t0, VIRTIO_F_VERSION_1_WORD
     sw t0, VIRTIO_MMIO_DRIVER_FEATURES_SEL(a0)
     li t0, VIRTIO_F_VERSION_1_BIT

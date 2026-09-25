@@ -18,8 +18,8 @@ def glyph-ink []: nothing -> record {
     }
 }
 
-def main [--kernel: path, --image: path, --out: path] {
-    let run = (jab launch --kernel $kernel --image $image --out $out --capture 2sec)
+def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
+    let run = (jab launch --kernel $kernel --image $image --out $out --set $set --capture 2sec)
     assert equal $run.serial "uart first\nuart again\n" "the UART's two lines and nothing else"
     assert equal (open --raw $run.qemu_log) "" "QEMU has no complaint about the guest"
     assert ($run.screen != "") "a screen was taken"

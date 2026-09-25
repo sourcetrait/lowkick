@@ -2,7 +2,9 @@
 # sdk/nu/jab.nu, which reads workspace.jab.toml and does all lookups and
 # up-to-date checks in one process. Needs nushell, just, a riscv64 GNU
 # toolchain, and qemu-system-riscv64; see the tool for how the toolchain
-# and the target directory are found.
+# and the target directory are found. `--set debug,data` after a recipe
+# names the build symbols; a build lands in .target/debug with DEBUG set
+# and in .target/release otherwise.
 
 set shell := ["nu", "-c"]
 set windows-shell := ["nu", "-c"]
@@ -13,21 +15,23 @@ jab := here / "sdk" / "nu" / "jab.nu"
 
 default: build
 
-# Build the kernel, then every program, skipping what is up to date
-build:
-    ^nu "{{jab}}" workspace build "{{here}}"
+# Build the kernel, then every program, skipping what is up to date;
+# release, or `just build --set debug`
+build *args:
+    ^nu "{{jab}}" workspace build "{{here}}" {{args}}
 
-# Build everything, then run the integration test of every program, of
-# one category (`just test example`), or of one program
+# Build everything with DEBUG set, then run the integration test of every
+# program, of one category (`just test example`), or of one program
 # (`just test example helloworld`); prints each test's output and a
 # summary, fails if any fails
-test category="" name="":
-    ^nu "{{jab}}" workspace test "{{here}}" "{{category}}" "{{name}}"
+test category="" name="" *args:
+    ^nu "{{jab}}" workspace test "{{here}}" "{{category}}" "{{name}}" {{args}}
 
 # Build everything, then run one program with the console window:
-# `just run example helloworld`
-run category name:
-    ^nu "{{jab}}" workspace run "{{here}}" "{{category}}" "{{name}}"
+# `just run example helloworld`; release, or `just run example bounce
+# --set debug`, which writes the kernel's debug channel to a file
+run category name *args:
+    ^nu "{{jab}}" workspace run "{{here}}" "{{category}}" "{{name}}" {{args}}
 
 clean:
     rm -rf "{{here}}/.target"

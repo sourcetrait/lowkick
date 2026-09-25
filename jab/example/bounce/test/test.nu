@@ -4,8 +4,8 @@
 use ../../../sdk/nu/jab.nu
 use std/assert
 
-def main [--kernel: path, --image: path, --out: path] {
-    let run = (jab launch --kernel $kernel --image $image --out $out --capture 3sec)
+def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
+    let run = (jab launch --kernel $kernel --image $image --out $out --set $set --capture 3sec)
     assert equal $run.serial "" "the UART stays silent"
     assert equal (open --raw $run.qemu_log) "" "QEMU has no complaint about the guest"
     assert ($run.screen != "") "a screen was taken"

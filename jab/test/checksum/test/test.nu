@@ -11,8 +11,8 @@ use std/assert
 const SHA3_256_EMPTY = "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
 const SHA3_256_ABC = "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"
 
-def main [--kernel: path, --image: path, --out: path] {
-    let run = (jab launch --kernel $kernel --image $image --out $out --seconds 60)
+def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
+    let run = (jab launch --kernel $kernel --image $image --out $out --set $set --seconds 60)
     assert equal $run.status 0 $"exit status, with the UART: ($run.serial)"
     assert equal (open --raw $run.qemu_log | into binary | bytes length) 0 "QEMU has no complaint about the guest"
     let got = ($run.serial | lines | where {|l| $l starts-with "d " } | each {|l| $l | str substring 2.. })

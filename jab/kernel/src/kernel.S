@@ -6,9 +6,10 @@
 # clock, installs the trap vector, and enters the program at
 # JAB_PROGRAM_BASE in user mode with its stack at JAB_STACK_TOP and
 # every other register cleared. The display comes up when the program
-# asks for it. The UART carries only the program's output unless
-# JAB_DEBUG is defined at assembly (as --defsym JAB_DEBUG=1), which adds
-# the kernel's own lines.
+# asks for it. The UART carries only the program's output and the fault
+# lines; with DEBUG set at assembly (`--set debug`) the kernel's own
+# lines go to its debug channel, a virtio-serial port brought up first
+# (serial.S).
 .section .text
 .global kmain
 kmain:
@@ -37,9 +38,16 @@ kmain:
     # The program may read the time counter.
     li t0, SCOUNTEREN_TM
     csrw scounteren, t0
-.ifdef JAB_DEBUG
+.ifdef DEBUG
+    # the debug channel first, so the banner and everything after it go
+    # there
+    call serial_open
     la a0, msg_banner
-    call uart_puts
+    call debug_puts
+.pushsection .rodata
+msg_banner:
+    .asciz "jab: kernel up on qemu virt\n"
+.popsection
 .endif
     # sscratch holds the kernel stack top while the program runs.
     la t0, kernel_stack_top
@@ -87,7 +95,3 @@ kernel_stack:
     .skip 16384
 .global kernel_stack_top
 kernel_stack_top:
-
-.section .rodata
-msg_banner:
-    .asciz "jab: kernel up on qemu virt\n"

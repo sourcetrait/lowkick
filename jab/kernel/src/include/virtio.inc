@@ -32,6 +32,7 @@
 .set VIRTIO_MAGIC, 0x74726976
 .set VIRTIO_VERSION_MODERN, 2
 .set VIRTIO_ID_BLOCK, 2
+.set VIRTIO_ID_CONSOLE, 3
 .set VIRTIO_ID_GPU, 16
 .set VIRTIO_ID_INPUT, 18
 
@@ -41,10 +42,34 @@
 .set VIRTIO_STATUS_DRIVER_OK, 4
 .set VIRTIO_STATUS_FEATURES_OK, 8
 
-# The one feature the kernel offers: VIRTIO_F_VERSION_1, feature bit 32,
-# which is bit 0 of feature word 1
+# The feature the kernel offers every device: VIRTIO_F_VERSION_1,
+# feature bit 32, which is bit 0 of feature word 1. A device's own
+# features sit in word 0 and are offered beside it.
 .set VIRTIO_F_VERSION_1_WORD, 1
 .set VIRTIO_F_VERSION_1_BIT, 1
+
+# virtio-console, which QEMU calls virtio-serial: with its multiport
+# feature the device carries a port per channel, queues 2 and 3 carry
+# control messages (the device's to the kernel, the kernel's to the
+# device), and port n receives on queue 2n+2 and transmits on 2n+3. A
+# control message is a port id, an event, and a value; the device names
+# each port it carries once told the kernel is ready, and a port carries
+# bytes once the kernel has answered for it and opened it.
+.set VIRTIO_CONSOLE_F_MULTIPORT_BIT, (1 << 1)
+.set VIRTIO_CONSOLE_CONTROL_RX_QUEUE, 2
+.set VIRTIO_CONSOLE_CONTROL_TX_QUEUE, 3
+.set VIRTIO_CONSOLE_CONTROL_ID, 0
+.set VIRTIO_CONSOLE_CONTROL_EVENT, 4
+.set VIRTIO_CONSOLE_CONTROL_VALUE, 6
+.set VIRTIO_CONSOLE_CONTROL_SIZE, 8
+.set VIRTIO_CONSOLE_DEVICE_READY, 0
+.set VIRTIO_CONSOLE_PORT_ADD, 1
+.set VIRTIO_CONSOLE_PORT_REMOVE, 2
+.set VIRTIO_CONSOLE_PORT_READY, 3
+.set VIRTIO_CONSOLE_CONSOLE_PORT, 4
+.set VIRTIO_CONSOLE_RESIZE, 5
+.set VIRTIO_CONSOLE_PORT_OPEN, 6
+.set VIRTIO_CONSOLE_PORT_NAME, 7
 
 # A split virtqueue of VIRTQ_SIZE entries: the descriptor table, the
 # driver's (available) ring, and the device's (used) ring

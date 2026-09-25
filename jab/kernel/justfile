@@ -1,7 +1,8 @@
 # The Jab kernel. Every recipe hands off to the SDK's nushell tool, found
 # through the manifest's `sdk`, which reads kernel.jab.toml and does the
 # lookups (workspace, toolchain, target) and the up-to-date check.
-# JAB_DEBUG=1 in the environment assembles the kernel's own UART lines in.
+# `just build --set debug` assembles the kernel's debug channel in, and
+# lands it in .target/debug rather than .target/release.
 
 set shell := ["nu", "-c"]
 set windows-shell := ["nu", "-c"]
@@ -12,8 +13,8 @@ here := justfile_directory()
 default: build
 
 # Assemble src/*.S and link them to <target>/kernel/jab.elf when stale
-build:
-    let sdk = (open kernel.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") build --kernel "{{here}}"
+build *args:
+    let sdk = (open kernel.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") build --kernel "{{here}}" {{args}}
 
 clean:
     let sdk = (open kernel.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") clean --kernel "{{here}}"

@@ -4,8 +4,8 @@
 use ../../../sdk/nu/jab.nu
 use std/assert
 
-def main [--kernel: path, --image: path, --out: path] {
-    let run = (jab launch --kernel $kernel --image $image --out $out)
+def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
+    let run = (jab launch --kernel $kernel --image $image --out $out --set $set)
     assert equal $run.status 1 "exit status"
     assert ($run.serial | str contains "jab: program fault: cause=0x000000000000000f") "a store page fault reported"
     assert ($run.serial | str contains "tval=0x0000000080000000") "the kernel address reported"

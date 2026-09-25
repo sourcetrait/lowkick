@@ -9,9 +9,9 @@ use std/assert
 
 const MODULUS = 251
 
-def main [--kernel: path, --image: path, --out: path] {
+def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     let oracle = (build-oracle ($out | path join "xxoracle"))
-    let run = (jab launch --kernel $kernel --image $image --out $out --seconds 60)
+    let run = (jab launch --kernel $kernel --image $image --out $out --set $set --seconds 60)
     assert equal $run.status 0 $"exit status, with the UART: ($run.serial | str substring 0..400)"
     assert equal (open --raw $run.qemu_log | into binary | bytes length) 0 "QEMU has no complaint about the guest"
     let got = ($run.serial | lines | where {|l| $l starts-with "h " } | each {|l|

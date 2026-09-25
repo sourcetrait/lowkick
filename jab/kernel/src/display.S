@@ -175,16 +175,20 @@ display_open:
     beqz a0, 5f
     la t0, gpu_base
     sd a0, 0(t0)
-.ifdef JAB_DEBUG
+.ifdef DEBUG
     la a0, msg_gpu_at
-    call uart_puts
+    call debug_puts
     la t0, gpu_base
     ld a0, 0(t0)
-    call uart_put_hex
+    call debug_put_hex
     li a0, '\n'
-    call uart_putc
+    call debug_putc
     la t0, gpu_base
     ld a0, 0(t0)
+.pushsection .rodata
+msg_gpu_at:
+    .asciz "jab: gpu at "
+.popsection
 .endif
     call virtio_init
     bnez a0, 6f
@@ -289,8 +293,8 @@ display_present_rect:
     addi sp, sp, 48
     ret
 
-# gpu_get_display_info: ask what the display is; with JAB_DEBUG the
-# first mode is reported.
+# gpu_get_display_info: ask what the display is; with DEBUG the first
+# mode is reported.
 gpu_get_display_info:
     addi sp, sp, -16
     sd ra, 8(sp)
@@ -299,26 +303,32 @@ gpu_get_display_info:
     li a0, VIRTIO_GPU_HDR_SIZE
     li a1, VIRTIO_GPU_RESP_OK_DISPLAY_INFO
     call gpu_submit
-.ifdef JAB_DEBUG
+.ifdef DEBUG
     bnez a0, 1f
     la a0, msg_display
-    call uart_puts
+    call debug_puts
     la t0, gpu_resp
     lwu a0, (VIRTIO_GPU_DISPLAY_INFO_MODES + VIRTIO_GPU_RECT_WIDTH)(t0)
-    call uart_put_dec
+    call debug_put_dec
     li a0, 'x'
-    call uart_putc
+    call debug_putc
     la t0, gpu_resp
     lwu a0, (VIRTIO_GPU_DISPLAY_INFO_MODES + VIRTIO_GPU_RECT_HEIGHT)(t0)
-    call uart_put_dec
+    call debug_put_dec
     la a0, msg_enabled
-    call uart_puts
+    call debug_puts
     la t0, gpu_resp
     lwu a0, (VIRTIO_GPU_DISPLAY_INFO_MODES + VIRTIO_GPU_DISPLAY_ONE_ENABLED)(t0)
-    call uart_put_dec
+    call debug_put_dec
     li a0, '\n'
-    call uart_putc
+    call debug_putc
     li a0, 0
+.pushsection .rodata
+msg_display:
+    .asciz "jab: display "
+msg_enabled:
+    .asciz " enabled="
+.popsection
 1:
 .endif
     ld ra, 8(sp)
@@ -406,8 +416,8 @@ gpu_command:
     ret
 
 # gpu_submit: run the request of a0 bytes and expect a response of type
-# a1. Returns 0 when the device answered with it, else 1. With JAB_DEBUG
-# every command and its answer is reported on the UART.
+# a1. Returns 0 when the device answered with it, else 1. With DEBUG
+# every command and its answer is reported on the debug channel.
 gpu_submit:
     addi sp, sp, -32
     sd ra, 24(sp)
@@ -421,19 +431,25 @@ gpu_submit:
     la a5, gpu_resp
     li a6, VIRTIO_GPU_DISPLAY_INFO_SIZE
     call virtio_request
-.ifdef JAB_DEBUG
+.ifdef DEBUG
     la a0, msg_gpu_cmd
-    call uart_puts
+    call debug_puts
     la t0, gpu_cmd
     lwu a0, VIRTIO_GPU_HDR_TYPE(t0)
-    call uart_put_hex
+    call debug_put_hex
     la a0, msg_gpu_resp
-    call uart_puts
+    call debug_puts
     la t0, gpu_resp
     lwu a0, VIRTIO_GPU_HDR_TYPE(t0)
-    call uart_put_hex
+    call debug_put_hex
     li a0, '\n'
-    call uart_putc
+    call debug_putc
+.pushsection .rodata
+msg_gpu_cmd:
+    .asciz "jab: gpu cmd="
+msg_gpu_resp:
+    .asciz " resp="
+.popsection
 .endif
     la t0, gpu_resp
     lwu t1, VIRTIO_GPU_HDR_TYPE(t0)
@@ -617,15 +633,3 @@ console_col:
     .skip 8
 console_row:
     .skip 8
-
-.section .rodata
-msg_gpu_at:
-    .asciz "jab: gpu at "
-msg_gpu_cmd:
-    .asciz "jab: gpu cmd="
-msg_gpu_resp:
-    .asciz " resp="
-msg_display:
-    .asciz "jab: display "
-msg_enabled:
-    .asciz " enabled="

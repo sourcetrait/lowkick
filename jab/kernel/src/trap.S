@@ -158,18 +158,22 @@ bad_address:
     j qemu_exit
 
 # sys_exit (jab.exit): a0 is the status. QEMU ends with it, since no
-# launcher exists yet to return to; with JAB_DEBUG the status is also
-# reported.
+# launcher exists yet to return to; with DEBUG the status is also
+# reported on the debug channel.
 sys_exit:
-.ifdef JAB_DEBUG
+.ifdef DEBUG
     mv s0, a0
     la a0, msg_exit
-    call uart_puts
+    call debug_puts
     mv a0, s0
-    call uart_put_dec
+    call debug_put_dec
     li a0, '\n'
-    call uart_putc
+    call debug_putc
     mv a0, s0
+.pushsection .rodata
+msg_exit:
+    .asciz "jab: exit "
+.popsection
 .endif
     j qemu_exit
 
@@ -289,8 +293,6 @@ syscall_table:
     .quad sys_gz_read
     .quad sys_checksum
     .quad sys_hash
-msg_exit:
-    .asciz "jab: exit "
 msg_bad_syscall:
     .asciz "jab: unknown system call "
 msg_bad_address:

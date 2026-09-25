@@ -1,8 +1,9 @@
 # A Jab program. Every recipe hands off to the SDK's nushell tool, found
 # through the manifest's `sdk`, which reads program.jab.toml and does the
 # lookups (workspace, toolchain, target, kernel, display) and the
-# up-to-date check. Standalone, with no workspace above, JAB_KERNEL names
-# the kernel ELF to run on.
+# up-to-date check. `--set debug,data` names the build symbols; `test`
+# always sets DEBUG. Standalone, with no workspace above, JAB_KERNEL
+# names the kernel ELF to run on.
 
 set shell := ["nu", "-c"]
 set windows-shell := ["nu", "-c"]
@@ -12,18 +13,19 @@ here := justfile_directory()
 
 default: build
 
-# Assemble and link src/main.S to <target>/<path>/<name>.jab when stale
-build:
-    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") build "{{here}}"
+# Assemble and link src/main.S to <target>/<path>/<name>.jab when stale;
+# release, or `just build --set debug`
+build *args:
+    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") build "{{here}}" {{args}}
 
-# Build, then run test/test.nu on the kernel
-test:
-    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") test "{{here}}"
+# Build with DEBUG set, then run test/test.nu on the debug kernel
+test *args:
+    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") test "{{here}}" {{args}}
 
 # Build, then run on the kernel with the console window, the UART on
 # stdio; the exit code is the program's status
-run:
-    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") run "{{here}}"
+run *args:
+    let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") run "{{here}}" {{args}}
 
 clean:
     let sdk = (open program.jab.toml | get sdk); ^nu ($sdk | path join "nu" "jab.nu") clean "{{here}}"

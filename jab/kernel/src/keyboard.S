@@ -50,16 +50,20 @@ keyboard_open:
     beqz a0, 5f
     la t0, keyboard_base
     sd a0, 0(t0)
-.ifdef JAB_DEBUG
+.ifdef DEBUG
     la a0, msg_keyboard_at
-    call uart_puts
+    call debug_puts
     la t0, keyboard_base
     ld a0, 0(t0)
-    call uart_put_hex
+    call debug_put_hex
     li a0, '\n'
-    call uart_putc
+    call debug_putc
     la t0, keyboard_base
     ld a0, 0(t0)
+.pushsection .rodata
+msg_keyboard_at:
+    .asciz "jab: keyboard at "
+.popsection
 .endif
     call virtio_init
     bnez a0, 6f
@@ -106,9 +110,13 @@ keyboard_open:
     li a0, 0
     j 8f
 5:
-.ifdef JAB_DEBUG
+.ifdef DEBUG
     la a0, msg_no_keyboard
-    call uart_puts
+    call debug_puts
+.pushsection .rodata
+msg_no_keyboard:
+    .asciz "jab: no keyboard\n"
+.popsection
 .endif
     li a0, 1
     j 8f
@@ -282,9 +290,3 @@ keyboard_base:
     .skip 8
 keyboard_state:
     .skip 8
-
-.section .rodata
-msg_keyboard_at:
-    .asciz "jab: keyboard at "
-msg_no_keyboard:
-    .asciz "jab: no keyboard\n"

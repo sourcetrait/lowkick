@@ -327,6 +327,16 @@ collide:
     li t0, TOUCH_SQ
     slli t0, t0, 2 * FIX
     bgt a5, t0, 9f
+.ifdef DEBUG
+    # a meeting, reported for the test to read: its outcome depends on
+    # where the other sphere started, so a run that had one is judged
+    # differently from one that did not
+    jab.uart.print msg_meeting
+.pushsection .rodata
+msg_meeting:
+    .asciz "wasd: meeting\n"
+.popsection
+.endif
     beqz a5, 3f
     # the other sphere, if closing: its speed's part along the line,
     # taken away twice
