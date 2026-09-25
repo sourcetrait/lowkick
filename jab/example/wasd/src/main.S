@@ -7,15 +7,17 @@
 # off the walls as in bounce, and off your sphere too. The two never
 # overlap. Positions and speeds carry FIX fractional bits.
 #
-# The data channel carries a small binary API, records both ways,
-# little-endian, each field at its own width. The host drives with key
-# events of CMD_SIZE bytes, the shape the keyboard delivers (a JAB_KEY_*
-# code, then pressed or released), which go through the same held-flag
-# path as the keys. wasd reports in records of REPORT_SIZE bytes: a
-# velocity record for a sphere when its velocity changes, an
-# acceleration record when the drive vector the held keys apply changes,
-# and a hit record per sphere per collision with the contact point, a
-# wall or the other sphere. Values are the program's own fixed point.
+# Over the API, records both ways, little-endian, each field at its own
+# width. The host drives with key events of CMD_SIZE bytes, the shape
+# the keyboard delivers (a JAB_KEY_* code, then pressed or released),
+# which go through the same held-flag path as the keys. wasd reports in
+# records of REPORT_SIZE bytes: a velocity record for a sphere when its
+# velocity changes, an acceleration record when the drive vector the
+# held keys apply changes, and a hit record per sphere per collision
+# with the contact point, a wall or the other sphere. Values are the
+# program's own fixed point. With no API port on the machine (`just run
+# example wasd` without `--api`) the reads find nothing and the writes
+# are refused, and the example runs on the keyboard alone.
 .include "jab.inc"
 
 .set RADIUS, 90
@@ -119,7 +121,7 @@ frame:
     jab.await
     mv s0, a0
     call read_keys
-    call read_data
+    call read_api
     andi t0, s0, JAB_AWAIT_DISPLAY
     beqz t0, frame
     call move_player
@@ -148,15 +150,15 @@ read_keys:
     addi sp, sp, 16
     ret
 
-# read_data: take every key event the host has sent through the data
-# channel and apply it. Bytes arrive as a stream, so a record may come
-# in two pieces; the piece in hand waits in cmd_partial for the rest.
-read_data:
+# read_api: take every key event the host has sent over the API and
+# apply it. Bytes arrive as a stream, so a record may come in two
+# pieces; the piece in hand waits in cmd_partial for the rest.
+read_api:
     addi sp, sp, -48
     sd ra, 40(sp)
 1:
     la t0, cmd_read
-    jab.data.read t0, CMD_READ_BYTES
+    jab.api.read t0, CMD_READ_BYTES
     beqz a0, 9f
     la t0, cmd_read
     sd t0, 0(sp)                # the next byte to take
@@ -719,7 +721,7 @@ report:
     li t2, REPORT_SIZE
     mul t1, t1, t2
     la t0, report_buffer
-    jab.data.write t0, t1
+    jab.api.write t0, t1
 13:
     ld ra, 8(sp)
     addi sp, sp, 16

@@ -50,15 +50,15 @@ frame_flipped:
 # sys_await (jab.await): a0 is the mask of events to wait for, 0 for
 # all of them: the display's next tick (JAB_AWAIT_DISPLAY), a key event
 # (JAB_AWAIT_KEYBOARD), which brings the keyboard up and is dropped from
-# the mask when there is none, and bytes from the host
-# (JAB_AWAIT_DATA), dropped when the build or the machine has no data
-# port. a0 becomes the events that ended the wait, 0 when nothing in
-# the mask can happen.
+# the mask when there is none, and bytes from the host over the API
+# (JAB_AWAIT_API), dropped when the machine has no API port. a0 becomes
+# the events that ended the wait, 0 when nothing in the mask can
+# happen.
 .global sys_await
 sys_await:
     mv s0, a0
     bnez s0, 1f
-    li s0, JAB_AWAIT_DISPLAY | JAB_AWAIT_KEYBOARD | JAB_AWAIT_DATA
+    li s0, JAB_AWAIT_DISPLAY | JAB_AWAIT_KEYBOARD | JAB_AWAIT_API
 1:
     andi t0, s0, JAB_AWAIT_KEYBOARD
     beqz t0, 2f
@@ -66,16 +66,12 @@ sys_await:
     beqz a0, 2f
     andi s0, s0, ~JAB_AWAIT_KEYBOARD
 2:
-.ifdef DATA
-    andi t0, s0, JAB_AWAIT_DATA
+    andi t0, s0, JAB_AWAIT_API
     beqz t0, 20f
-    call serial_open
-    beqz a0, 20f
-    andi s0, s0, ~JAB_AWAIT_DATA
+    call api_up
+    bnez a0, 20f
+    andi s0, s0, ~JAB_AWAIT_API
 20:
-.else
-    andi s0, s0, ~JAB_AWAIT_DATA
-.endif
     li a0, 0
     beqz s0, 9f
     # the display's tick: a tick already past moves forward, period by
@@ -97,7 +93,7 @@ sys_await:
     li t4, SIE_STIE
     csrs sie, t4
 3:
-    andi t0, s0, JAB_AWAIT_KEYBOARD | JAB_AWAIT_DATA
+    andi t0, s0, JAB_AWAIT_KEYBOARD | JAB_AWAIT_API
     beqz t0, 4f
     li t4, SIE_SEIE
     csrs sie, t4
@@ -118,14 +114,12 @@ sys_await:
     beqz a0, 6f
     ori s1, s1, JAB_AWAIT_KEYBOARD
 6:
-.ifdef DATA
-    andi t0, s0, JAB_AWAIT_DATA
+    andi t0, s0, JAB_AWAIT_API
     beqz t0, 60f
-    call data_pending
+    call api_pending
     beqz a0, 60f
-    ori s1, s1, JAB_AWAIT_DATA
+    ori s1, s1, JAB_AWAIT_API
 60:
-.endif
     bnez s1, 7f
     wfi
     call plic_service

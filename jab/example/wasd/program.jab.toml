@@ -2,4 +2,3 @@ name = 'wasd'
 sdk = '../../sdk'
 includes = ['../../sdk']
 link = '../../sdk/program.ld'
-data = true

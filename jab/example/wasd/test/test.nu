@@ -1,6 +1,6 @@
-# wasd's integration test, through its data channel: the host holds D
-# for most of a second by sending key events into the port, and reads
-# back wasd's records. The drive vector is reported when D goes down and
+# wasd's integration test, through the API: the host holds D for most
+# of a second by sending key events into the port, and reads back
+# wasd's records. The drive vector is reported when D goes down and
 # when it comes up, your sphere's velocity grows while it is held and
 # shrinks after, the ball's first velocity is bounce's, every wall hit's
 # contact point lies on a screen edge, a meeting is reported for both
@@ -39,14 +39,14 @@ const RELEASED = 0
 def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     let hold = (key-event $KEY_D $PRESSED)
     let free = (key-event $KEY_D $RELEASED)
-    let run = (jab launch --kernel $kernel --image $image --out $out --set $set --data [[at, bytes]; [1sec, $hold], [1800ms, $free]] --capture 3500ms)
-    print $"wasd: status ($run.status) after ($run.wall_seconds | math round -p 2) seconds, ($run.data | bytes length) bytes of records, ($run.debug | lines | length) kernel debug lines"
+    let run = (jab launch --kernel $kernel --image $image --out $out --set $set --api --send [[at, bytes]; [1sec, $hold], [1800ms, $free]] --capture 3500ms)
+    print $"wasd: status ($run.status) after ($run.wall_seconds | math round -p 2) seconds, ($run.api | bytes length) bytes of records, ($run.debug | lines | length) kernel debug lines"
     assert equal $run.serial "" $"the UART stays silent: ($run.serial)"
     assert equal (open --raw $run.qemu_log) "" "QEMU has no complaint about the guest"
     assert ($run.screen != "") "a screen was taken"
-    let reports = (records $run.data)
-    assert (($reports | length) > 0) "wasd reported through the data channel"
-    assert equal (($run.data | bytes length) mod $REPORT_SIZE) 0 "whole records only"
+    let reports = (records $run.api)
+    assert (($reports | length) > 0) "wasd reported over the API"
+    assert equal (($run.api | bytes length) mod $REPORT_SIZE) 0 "whole records only"
 
     # the drive vector: D down, then D up
     let drive = ($reports | where kind == $REPORT_ACCELERATION and sphere == $SPHERE_PLAYER)

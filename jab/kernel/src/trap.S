@@ -11,7 +11,7 @@
 # syscall_table by its number in a7; a handler finds its arguments in
 # slots 80 on (a0 to a3), leaves its results in slots 80 and 88 (a0 and
 # a1), and jumps to trap_return.
-.set SYSCALL_LAST, JAB_SYS_DATA_READ
+.set SYSCALL_LAST, JAB_SYS_API_READ
 
 .section .text
 .balign 4
@@ -195,21 +195,6 @@ program_fault:
     li a0, 1
     j qemu_exit
 
-.ifndef DATA
-# Without DATA the data calls answer as with no port: a write is
-# refused with 1, a read gives no bytes and none waiting.
-.global sys_data_write
-sys_data_write:
-    li a0, 1
-    sd a0, 80(sp)
-    j trap_return
-.global sys_data_read
-sys_data_read:
-    sd zero, 80(sp)
-    sd zero, 88(sp)
-    j trap_return
-.endif
-
 kernel_fault:
     la a0, msg_kernel_fault
     call uart_puts
@@ -308,8 +293,8 @@ syscall_table:
     .quad sys_gz_read
     .quad sys_checksum
     .quad sys_hash
-    .quad sys_data_write
-    .quad sys_data_read
+    .quad sys_api_write
+    .quad sys_api_read
 msg_bad_syscall:
     .asciz "jab: unknown system call "
 msg_bad_address:

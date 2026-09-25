@@ -28,9 +28,9 @@ The toolchain is found by its install directory, the one holding
 or program, else `extern/riscv` beside this file, else the tools on
 `PATH`.
 
-A build is described by its symbols: `just build --set debug,data`
+A build is described by its symbols: `just build --set debug,stats`
 names them, in any case, and each reaches the assembler as a defined
-symbol, `DEBUG` and `DATA`, for `.ifdef` to read in the kernel and in
+symbol, `DEBUG` and `STATS`, for `.ifdef` to read in the kernel and in
 your program alike. A build with `DEBUG` lands in `.target/debug` and
 any other in `.target/release`, so the two coexist. `just test` always
 sets `DEBUG`, so a program's own debug reporting is there for its test;
@@ -44,10 +44,20 @@ writes to `debug.log` beside the program's build output and a test reads
 back as `debug` from `jab launch`. The console UART carries only what
 the program sends it, and the fault lines, in every build.
 
-A program that says `data = true` in its `program.jab.toml` gets a data
-channel, a second port, bytes both ways between it and the host through
-`jab.data.write`, `jab.data.read`, and `jab.data.await`: the program and
-its kernel are built with `DATA`, and the host's end is a pair of named
-pipes, `data.in` and `data.out` beside the build output, which `just
-run` names and a test drives through `jab launch --data`. `example/wasd`
-speaks a small binary API over it.
+The API is a second port, bytes both ways between a program and the
+host through `jab.api.write`, `jab.api.read`, and `jab.api.await`.
+Every kernel carries it and any build runs with or without it: `just
+run example wasd --api` puts the port on the machine, and without the
+flag the calls report that there is none. The host's end sits beside
+the build output: `api.in`, a named pipe the host writes into, and
+`api.out`, a file the program's bytes land in, which a test drives
+through `jab launch --api --send`. `example/wasd` speaks a small binary
+API over it, its records at the top of its `main.S`.
+
+A run prints nothing of its own; what the kernel says in a debug build
+is in `debug.log` beside the program's build output, and what a program
+sends over the API is in `api.out` there.
+
+The CPU is RVA23, `-cpu rva23s64`, which QEMU carries from 9.2; on an
+older QEMU the tool runs the generic `rv64`, which has what the kernel
+needs, and `JAB_CPU` overrides either with any `-cpu` value.
