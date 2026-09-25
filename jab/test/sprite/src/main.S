@@ -3,9 +3,10 @@
 # every way jab.sprite.draw can: plain, hanging off the top left and the
 # bottom right corners, tinted, at twice and at half its size, a frame
 # of a two-frame sprite, mirrored each way and both, turned a quarter,
-# an eighth, and a twelfth, and the refusals, a frame past the sprite
-# and a scale past the most; each call's code goes to the UART as `draw
-# <code>`. Then one flip, and idle for the test to take the screen.
+# an eighth, and a twelfth, a spanned sprite six ways, solid draws
+# four ways, and the refusals, a frame past the sprite and a scale
+# past the most; each call's code goes to the UART as `draw <code>`.
+# Then one flip, and idle for the test to take the screen.
 .include "jab.inc"
 
 .set BACKGROUND, 0x00203040
@@ -109,6 +110,71 @@ _start:
     li t5, JAB_SPRITE_FLIP_H | 30
     jab.sprite.draw s0, zero, t1, t2, t3, t4, t5
     call report
+    # the spanned sprite, whose table says where each row's pixels are:
+    # plain, mirrored, at three times, at half, mirrored at three times,
+    # and turned an eighth at four times
+    la s2, thin
+    li t1, 900
+    li t2, 100
+    jab.sprite.draw s2, zero, t1, t2
+    call report
+    li t1, 900
+    li t2, 200
+    li t4, JAB_SPRITE_SCALE_ONE
+    li t5, JAB_SPRITE_FLIP_H
+    jab.sprite.draw s2, zero, t1, t2, t3, t4, t5
+    call report
+    li t1, 900
+    li t2, 300
+    li t4, 3 * JAB_SPRITE_SCALE_ONE
+    jab.sprite.draw s2, zero, t1, t2, t3, t4
+    call report
+    li t1, 900
+    li t2, 400
+    li t4, JAB_SPRITE_SCALE_ONE / 2
+    jab.sprite.draw s2, zero, t1, t2, t3, t4
+    call report
+    li t1, 900
+    li t2, 450
+    li t4, 3 * JAB_SPRITE_SCALE_ONE
+    li t5, JAB_SPRITE_FLIP_H
+    jab.sprite.draw s2, zero, t1, t2, t3, t4, t5
+    call report
+    li t1, 900
+    li t2, 550
+    li t4, 4 * JAB_SPRITE_SCALE_ONE
+    li t5, 45
+    jab.sprite.draw s2, zero, t1, t2, t3, t4, t5
+    call report
+    # solid: the spanned sprite's rows filled between their spans, plain
+    # and mirrored at three times; the unspanned one's whole box; and
+    # the spanned one turned an eighth at four times
+    li t1, 1000
+    li t2, 100
+    li t3, 0x00ff0000
+    li t4, JAB_SPRITE_SCALE_ONE
+    li t5, JAB_SPRITE_SOLID
+    jab.sprite.draw s2, zero, t1, t2, t3, t4, t5
+    call report
+    li t1, 1000
+    li t2, 200
+    li t4, 3 * JAB_SPRITE_SCALE_ONE
+    li t5, JAB_SPRITE_SOLID | JAB_SPRITE_FLIP_H
+    jab.sprite.draw s2, zero, t1, t2, t3, t4, t5
+    call report
+    li t1, 1000
+    li t2, 300
+    li t3, 0x0000ff00
+    li t4, JAB_SPRITE_SCALE_ONE
+    li t5, JAB_SPRITE_SOLID
+    jab.sprite.draw s0, zero, t1, t2, t3, t4, t5
+    call report
+    li t1, 1000
+    li t2, 400
+    li t4, 4 * JAB_SPRITE_SCALE_ONE
+    li t5, JAB_SPRITE_SOLID | 45
+    jab.sprite.draw s2, zero, t1, t2, t3, t4, t5
+    call report
     # a frame the sheet does not have
     li t0, 2
     li t1, 500
@@ -159,19 +225,33 @@ report:
 
 .section .rodata
 .balign 4
-# blend: one frame of 4 by 3, every kind of alpha, as 0xAARRGGBB words
+# blend: one frame of 4 by 3, every kind of alpha, as 0xAARRGGBB words,
+# no flags, so it is drawn whole
 blend:
-    .word 4, 3, 1
+    .word 4, 3, 1, 0
     .word 0xffff0000, 0x8000ff00, 0x000000ff, 0xffffffff
     .word 0x40ff8000, 0xc0ffffff, 0xff102030, 0x01ffffff
     .word 0x7f7f7f7f, 0xfe000000, 0x00ffffff, 0x80404040
 # sheet: two frames of 2 by 2, one after the other
 sheet:
-    .word 2, 2, 2
+    .word 2, 2, 2, 0
     .word 0xff111111, 0xff222222
     .word 0xff333333, 0xff444444
     .word 0xffaa0000, 0xff00aa00
     .word 0xff0000aa, 0x80ffffff
+# thin: one frame of 6 by 4, mostly clear, with its span table, a row
+# with nothing, a run, two apart with a clear pixel that carries a
+# colour between them, and one at the far edge
+thin:
+    .word 6, 4, 1, JAB_SPRITE_SPANNED
+    .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000
+    .word 0x00000000, 0x00000000, 0xffff0000, 0xff00ff00, 0x00000000, 0x00000000
+    .word 0x00000000, 0xff0000ff, 0x00123456, 0x00000000, 0x80ffffff, 0x00000000
+    .word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0xffffff00
+    .2byte 6, 0
+    .2byte 2, 3
+    .2byte 1, 4
+    .2byte 5, 5
 msg_no_display:
     .asciz "sprite: no display\n"
 

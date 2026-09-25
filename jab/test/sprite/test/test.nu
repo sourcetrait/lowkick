@@ -14,6 +14,7 @@ const plain = 0xffffff
 const one = 256
 const flip_h = 0x10000
 const flip_v = 0x20000
+const solid = 0x40000
 const width = 1920
 const height = 1080
 
@@ -29,6 +30,16 @@ const blend = [
 const sheet = [
     [[0xff111111 0xff222222] [0xff333333 0xff444444]]
     [[0xffaa0000 0xff00aa00] [0xff0000aa 0x80ffffff]]
+]
+# thin, one frame of six by four, spanned in the program; the spans
+# change nothing the screen shows, so the same rules apply here
+const thin = [
+    [
+        [0 0 0 0 0 0]
+        [0 0 0xffff0000 0xff00ff00 0 0]
+        [0 0xff0000ff 0x00123456 0 0x80ffffff 0]
+        [0 0 0 0 0 0xffffff00]
+    ]
 ]
 
 # x / 255, rounded, the way the kernel does it
@@ -77,13 +88,22 @@ def trig [angle: int, table: list<int>]: nothing -> list<int> {
 
 # What one draw call leaves on the screen: every pixel of the drawn
 # rectangle, or of the turned rectangle's bounding box, that is on the
-# screen, as {x, y, rgb}, plus a ring of the background around it.
-def drawn [sprite: list, frame: int, x: int, y: int, tint: int, scale: int, pose: int]: nothing -> table<x: int, y: int, rgb: list<int>> {
+# screen, as {x, y, rgb}, plus a ring of the background around it. A
+# solid draw writes the tint over every pixel the frame covers: with
+# --spanned, the row's first to last opaque column when unturned, as
+# the kernel's table has it; the whole frame otherwise.
+def drawn [sprite: list, frame: int, x: int, y: int, tint: int, scale: int, pose: int, --spanned]: nothing -> table<x: int, y: int, rgb: list<int>> {
     let rows = ($sprite | get $frame)
     let fw = ($rows | first | length)
     let fh = ($rows | length)
     let mirror_h = (($pose bit-and $flip_h) != 0)
     let mirror_v = (($pose bit-and $flip_v) != 0)
+    let is_solid = (($pose bit-and $solid) != 0)
+    let tint_rgb = [(($tint bit-shr 16) bit-and 0xff) (($tint bit-shr 8) bit-and 0xff) ($tint bit-and 0xff)]
+    let spans = ($rows | each {|row|
+        let cols = ($row | enumerate | where {|c| (($c.item bit-shr 24) bit-and 0xff) != 0 } | get index)
+        if ($cols | is-empty) { { first: $fw, last: 0 } } else { { first: ($cols | first), last: ($cols | last) } }
+    })
     let angle = (($pose bit-and 0xffff) mod 360)
     let dw = (($fw * $scale) bit-shr 8)
     let dh = (($fh * $scale) bit-shr 8)
@@ -128,7 +148,17 @@ def drawn [sprite: list, frame: int, x: int, y: int, tint: int, scale: int, pose
                     if $sx >= $fw or $sy >= $fh { null } else { { sx: $sx, sy: $sy } }
                 }
             })
-            let rgb = (if $hit == null { $background } else { composite (do $sample $hit.sx $hit.sy) $background $tint })
+            let rgb = (if $hit == null { $background } else if $is_solid {
+                # unturned, a spanned row covers its first to last opaque
+                # source column, as the kernel's table says; turned, or
+                # unspanned, the frame covers every pixel it maps to
+                if $angle == 0 and $spanned {
+                    let sx = (if $mirror_h { $fw - 1 - $hit.sx } else { $hit.sx })
+                    let sy = (if $mirror_v { $fh - 1 - $hit.sy } else { $hit.sy })
+                    let span = ($spans | get $sy)
+                    if $sx >= $span.first and $sx <= $span.last { $tint_rgb } else { $background }
+                } else { $tint_rgb }
+            } else { composite (do $sample $hit.sx $hit.sy) $background $tint })
             { x: $px, y: $py, rgb: $rgb }
         }
     } | flatten)
@@ -143,7 +173,7 @@ def drawn [sprite: list, frame: int, x: int, y: int, tint: int, scale: int, pose
 def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     let run = (jab launch --kernel $kernel --image $image --out $out --set $set --capture 2sec)
     assert equal (open --raw $run.qemu_log) "" "QEMU has no complaint about the guest"
-    let codes = ((1..13 | each {|_| "draw 0\n" } | str join "") + "draw 1\ndraw 2\ndraw 0\n")
+    let codes = ((1..23 | each {|_| "draw 0\n" } | str join "") + "draw 1\ndraw 2\ndraw 0\n")
     assert equal $run.serial $codes $"the codes: ($run.serial)"
     assert ($run.screen != "") "a screen was taken"
     let screen = (jab screen $run.screen)
@@ -162,6 +192,16 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
         (drawn $blend 0 800 100 $plain (4 * $one) 90)
         (drawn $blend 0 800 300 $plain (4 * $one) 45)
         (drawn $blend 0 800 500 $plain (3 * $one) ($flip_h bit-or 30))
+        (drawn $thin 0 900 100 $plain $one 0)
+        (drawn $thin 0 900 200 $plain $one $flip_h)
+        (drawn $thin 0 900 300 $plain (3 * $one) 0)
+        (drawn $thin 0 900 400 $plain ($one // 2) 0)
+        (drawn $thin 0 900 450 $plain (3 * $one) $flip_h)
+        (drawn $thin 0 900 550 $plain (4 * $one) 45)
+        (drawn $thin 0 1000 100 0xff0000 $one $solid --spanned)
+        (drawn $thin 0 1000 200 0xff0000 (3 * $one) ($solid bit-or $flip_h) --spanned)
+        (drawn $blend 0 1000 300 0x00ff00 $one $solid)
+        (drawn $thin 0 1000 400 0x00ff00 (4 * $one) ($solid bit-or 45) --spanned)
     ]
     mut checked = 0
     for d in ($draws | enumerate) {

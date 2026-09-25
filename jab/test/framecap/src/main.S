@@ -4,7 +4,8 @@
 # await then flip, half of them whole and half a rectangle, which take
 # two seconds at thirty-two a second while the hart halts between them.
 # Then a rectangle reaching past the screen's edge, which the kernel
-# must refuse. Reports on the UART.
+# must refuse; then a list of two rectangles as one flip, a list with
+# one past the edge, and a list of none. Reports on the UART.
 .include "jab.inc"
 
 .set FLIPS, 64
@@ -59,6 +60,28 @@ _start:
     la a1, badrect_digits
     call two_digits
     jab.uart.print badrect
+    # a list of two rectangles as one flip, then a list holding one
+    # past the edge and a list of none: rects=N badrects=N norects=N
+    jab.display.await
+    la t0, two_rects
+    li t1, 2
+    jab.display.flip.rects t0, t1
+    la a1, rects_digits
+    call two_digits
+    jab.uart.print rects
+    jab.display.await
+    la t0, bad_rects
+    li t1, 2
+    jab.display.flip.rects t0, t1
+    la a1, badrects_digits
+    call two_digits
+    jab.uart.print badrects
+    la t0, two_rects
+    li t1, 0
+    jab.display.flip.rects t0, t1
+    la a1, norects_digits
+    call two_digits
+    jab.uart.print norects
     jab.uart.print paced
     jab.exit 0
 
@@ -90,8 +113,29 @@ badrect:
     .ascii "badrect="
 badrect_digits:
     .asciz "00\n"
+rects:
+    .ascii "rects="
+rects_digits:
+    .asciz "00\n"
+badrects:
+    .ascii "badrects="
+badrects_digits:
+    .asciz "00\n"
+norects:
+    .ascii "norects="
+norects_digits:
+    .asciz "00\n"
 
 .section .rodata
+.balign 4
+# two rectangles apart on the screen, and two of which the second
+# reaches past the bottom
+two_rects:
+    .word 100, 100, 50, 50
+    .word 1000, 800, 200, 100
+bad_rects:
+    .word 100, 100, 50, 50
+    .word 1000, 1070, 200, 100
 paced:
     .asciz "paced\n"
 msg_no_display:

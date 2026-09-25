@@ -102,6 +102,20 @@
 # alignment, so its stride is the record rounded up to 16.
 .set VQ_STRIDE, (((VQ_BYTES + 15) / 16) * 16)
 
+# The GPU's control queue is the one queue with many commands in flight
+# at once, a rectangle list's transfers and flushes, so it has a record
+# of its own with GPUQ_SIZE entries: the rings at the same alignments,
+# the last used index, and how many chains are pending in a batch.
+.set GPUQ_SIZE, 64
+.set GPUQ_DESC, 0
+.set GPUQ_AVAIL, (GPUQ_DESC + GPUQ_SIZE * VIRTQ_DESC_SIZE)
+.set GPUQ_USED, (GPUQ_AVAIL + ((6 + 2 * GPUQ_SIZE + 3) / 4) * 4)
+.set GPUQ_LAST_USED, (GPUQ_USED + ((6 + 8 * GPUQ_SIZE + 7) / 8) * 8)
+.set GPUQ_PENDING, (GPUQ_LAST_USED + 8)
+.set GPUQ_BYTES, (GPUQ_PENDING + 8)
+# a batch is at most half the queue, two descriptors a chain
+.set GPUQ_CHAINS, (GPUQ_SIZE / 2)
+
 # The virtio-gpu control header every command and response starts with
 .set VIRTIO_GPU_HDR_TYPE, 0
 .set VIRTIO_GPU_HDR_FLAGS, 4

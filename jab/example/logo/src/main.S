@@ -7,11 +7,11 @@
 
 .set DISK, 1
 # the file: 480 by 640, so the sprite is that at four bytes a pixel and
-# a byte a row past the header, the rule for one frame, and the PNG
+# four bytes a row past the header, the rule for one frame, and the PNG
 # itself is under 32 KiB
 .set WIDTH, 480
 .set HEIGHT, 640
-.set SPRITE_BYTES, (JAB_SPRITE_PIXELS + WIDTH * HEIGHT * 4 + HEIGHT)
+.set SPRITE_BYTES, (JAB_SPRITE_PIXELS + HEIGHT * (WIDTH * 4 + 4))
 .set PNG_BYTES, 32768
 .set X, ((JAB_DISPLAY_WIDTH - WIDTH) / 2)
 .set Y, ((JAB_DISPLAY_HEIGHT - HEIGHT) / 2)

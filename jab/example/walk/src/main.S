@@ -8,10 +8,14 @@
 # of that edge, one enters, at once for an empty lane and otherwise
 # after a random wait, so the crowd staggers. A walker entering from
 # the right is the same frames mirrored. The screen stays black, as
-# the framebuffer starts. Each frame tick: every walker is erased,
-# moved, and its animation stepped, then every one is drawn top lane
-# to bottom so nearer walkers cover farther ones, and the screen is
-# flipped whole. Over the API, when a run has it, a record per walker
+# the framebuffer starts. Each frame tick: every walker's last shape
+# is cleared by drawing the same frame solid in black, which touches
+# its own pixels and not its whole box, it is moved and its animation
+# stepped, the area where it was and where it is noted as one
+# rectangle, then every one is drawn top lane to bottom so nearer
+# walkers cover farther ones, and the noted rectangles are flipped as
+# one, so the host copies and paints the walkers' own areas and not
+# the screen. Over the API, when a run has it, a record per walker
 # that enters and per walker that leaves, for the test.
 .include "jab.inc"
 
@@ -19,7 +23,7 @@
 .set FRAME_W, 480
 .set FRAME_H, 640
 .set FRAMES, 16
-.set SPRITE_BYTES, (JAB_SPRITE_PIXELS + FRAMES * (FRAME_W * FRAME_H * 4 + FRAME_H))
+.set SPRITE_BYTES, (JAB_SPRITE_PIXELS + FRAMES * FRAME_H * (FRAME_W * 4 + 4))
 .set LANES, 8
 .set LANE_H, (JAB_DISPLAY_HEIGHT / LANES)
 .set PER_LANE, 3
@@ -77,6 +81,8 @@ _start:
     sd t0, 0(t1)
 frame:
     jab.display.await
+    la t0, rect_count
+    sd zero, 0(t0)
     # every lane: its walkers moved along, and one in when there is room
     li s0, 0
 2:
@@ -91,14 +97,25 @@ frame:
     add s1, s2, t0              # the walker
     ld t0, W_ACTIVE(s1)
     beqz t0, 5f
-    # erase where it was
-    ld a0, W_X(s1)
-    srai a0, a0, 8
-    ld a1, W_Y(s1)
-    ld a2, W_DW(s1)
-    ld a3, W_DH(s1)
-    li a4, BACKGROUND
-    call fill_rect
+    # clear the shape it drew last tick: the same frame, place, size,
+    # and pose, drawn solid in the background's colour, which touches
+    # its own pixels and not its whole box
+    ld s4, W_X(s1)
+    srai s4, s4, 8              # the left edge it had
+    ld t1, W_FRAME(s1)
+    mv t2, s4
+    ld t3, W_Y(s1)
+    li t4, BACKGROUND
+    ld t5, W_SCALE(s1)
+    ld t6, W_DIR(s1)
+    bgez t6, 32f
+    li t6, JAB_SPRITE_FLIP_H | JAB_SPRITE_SOLID
+    j 33f
+32:
+    li t6, JAB_SPRITE_SOLID
+33:
+    la t0, sprite
+    jab.sprite.draw t0, t1, t2, t3, t4, t5, t6
     # move, and step the animation
     ld t0, W_X(s1)
     ld t1, W_SPEED(s1)
@@ -120,7 +137,24 @@ frame:
     sd t3, W_FRAME(s1)
 4:
     sd t1, W_TICK(s1)
+    # the area that changed, where it was and where it is, as one
+    ld t0, W_X(s1)
+    srai t0, t0, 8
+    ld t1, W_DW(s1)
+    mv a0, s4
+    blt s4, t0, 43f
+    mv a0, t0
+43:
+    add a1, s4, t1
+    add t2, t0, t1
+    bgt a1, t2, 44f
+    mv a1, t2
+44:
+    ld a2, W_Y(s1)
+    ld a3, W_DH(s1)
+    call note_rect
     # off the far side: the place is free
+    ld t0, W_X(s1)
     srai t0, t0, 8
     ld t2, W_DIR(s1)
     bltz t2, 41f
@@ -181,7 +215,17 @@ frame:
     addi s0, s0, 1
     li t0, LANES
     bltu s0, t0, 6b
+    # the changed areas, as one flip; with WHOLE set, the whole screen
+    # instead, for measuring the difference
+.ifdef WHOLE
     jab.display.flip
+.else
+    la t0, rect_count
+    ld t1, 0(t0)
+    beqz t1, frame
+    la t0, rects
+    jab.display.flip.rects t0, t1
+.endif
     j frame
 
 bad_sprite:
@@ -400,6 +444,43 @@ leave:
     addi sp, sp, 16
     ret
 
+# note_rect: the columns a0 to a1 of the rows a2 on for a3, clipped to
+# the screen, join the rectangles to flip; nothing when none of it is
+# on the screen.
+note_rect:
+    bgez a0, 1f
+    li a0, 0
+1:
+    li t0, JAB_DISPLAY_WIDTH
+    ble a1, t0, 2f
+    mv a1, t0
+2:
+    bge a0, a1, 9f
+    add t1, a2, a3              # the bottom
+    bgez a2, 3f
+    li a2, 0
+3:
+    li t0, JAB_DISPLAY_HEIGHT
+    ble t1, t0, 4f
+    mv t1, t0
+4:
+    bge a2, t1, 9f
+    la t2, rect_count
+    ld t3, 0(t2)
+    slli t4, t3, 4
+    la t0, rects
+    add t0, t0, t4
+    sw a0, JAB_RECT_X(t0)
+    sw a2, JAB_RECT_Y(t0)
+    sub a1, a1, a0
+    sw a1, JAB_RECT_WIDTH(t0)
+    sub t1, t1, a2
+    sw t1, JAB_RECT_HEIGHT(t0)
+    addi t3, t3, 1
+    sd t3, 0(t2)
+9:
+    ret
+
 # random: a0 becomes the next of an xorshift sequence from the seed.
 random:
     la t0, seed
@@ -412,49 +493,6 @@ random:
     xor t1, t1, t2
     sd t1, 0(t0)
     mv a0, t1
-    ret
-
-# fill_rect: the rectangle at a0, a1 of a2 by a3 pixels in the colour
-# a4, whatever of it is on the screen.
-fill_rect:
-    add t0, a0, a2              # the right edge
-    add t1, a1, a3              # the bottom
-    bgez a0, 1f
-    li a0, 0
-1:
-    li t2, JAB_DISPLAY_WIDTH
-    ble t0, t2, 2f
-    mv t0, t2
-2:
-    bge a0, t0, 9f
-    bgez a1, 3f
-    li a1, 0
-3:
-    li t2, JAB_DISPLAY_HEIGHT
-    ble t1, t2, 4f
-    mv t1, t2
-4:
-    bge a1, t1, 9f
-    sub t2, t0, a0              # the columns
-    li t3, JAB_DISPLAY_PITCH
-    mul t3, t3, a1
-    slli t4, a0, 2
-    add t3, t3, t4
-    li t4, JAB_DISPLAY_BASE
-    add t3, t3, t4              # the first pixel of the first row
-5:
-    mv t4, t3
-    mv t5, t2
-6:
-    sw a4, 0(t4)
-    addi t4, t4, 4
-    addi t5, t5, -1
-    bnez t5, 6b
-    li t4, JAB_DISPLAY_PITCH
-    add t3, t3, t4
-    addi a1, a1, 1
-    blt a1, t1, 5b
-9:
     ret
 
 .section .rodata
@@ -475,6 +513,10 @@ seed:
     .skip 8
 record:
     .skip R_SIZE
+rect_count:
+    .skip 8
+rects:
+    .skip LANES * PER_LANE * JAB_RECT_SIZE
 lanes:
     .skip LANES * LANE_SIZE
 sprite:

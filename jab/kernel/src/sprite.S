@@ -8,18 +8,25 @@
 # up repeats pixels and scaling down skips them; a step from one drawn
 # pixel to the next source one is fixed per draw in 16.16 fixed point,
 # and at JAB_SPRITE_SCALE_ONE it is exactly one, so an unscaled draw is
-# a plain copy of the frame. The pose mirrors and turns: a flip reads
-# the frame's columns or rows from the far end, and an angle turns the
-# scaled frame about its centre, the draw then walking the turned
-# rectangle's bounding box and mapping each pixel of it back through
-# the inverse turn, in 16.16 with a sine table, to the source pixel
-# under it or to nothing. Per pixel the alpha decides: 0 is skipped,
-# 255 copied, and anything between blended, each channel becoming
-# (s * a + d * (255 - a)) / 255, rounded; the tint multiplies each of
-# the sprite's channels by its own, over 255, first. Division by 255 is
-# the exact shift form (x + 128 + ((x + 128) >> 8)) >> 8. The record
-# and its pixels are read a byte at a time, so a sprite may sit
-# anywhere.
+# a plain copy of the frame. A spanned record, one the kernel decoded,
+# carries each row's first and last opaque column, and the unturned
+# draw walks only the drawn columns those map to, so a thin figure in
+# a wide frame costs its own pixels rather than the frame's. The pose
+# mirrors and turns: a flip reads the frame's columns or rows from the
+# far end, and an angle turns the scaled frame about its centre, the
+# draw then walking the turned rectangle's bounding box and mapping
+# each pixel of it back through the inverse turn, in 16.16 with a sine
+# table, to the source pixel under it or to nothing. Per pixel the
+# alpha decides: 0 is skipped, 255 copied, and anything between
+# blended, each channel becoming (s * a + d * (255 - a)) / 255,
+# rounded; the tint multiplies each of the sprite's channels by its
+# own, over 255, first, and a white pixel takes the tint outright,
+# which is the same number. Division by 255 is the exact shift form
+# (x + 128 + ((x + 128) >> 8)) >> 8. A solid draw writes the tint over
+# every pixel the frame covers, a row's span or the whole row, reading
+# no source pixel at all, which is how a program clears the shape it
+# drew a frame ago. The record and its pixels are read a byte at a
+# time, so a sprite may sit anywhere.
 
 # sprite_round255 reg, tmp: reg, a product of two bytes, becomes that
 # product divided by 255 and rounded.
@@ -51,6 +58,10 @@ sys_sprite_draw:
     addi a0, s0, JAB_SPRITE_FRAMES
     call sprite_le32
     mv s3, a0                   # the frames
+    addi a0, s0, JAB_SPRITE_FLAGS
+    call sprite_le32
+    la t0, sprite_flags
+    sd a0, 0(t0)
     mul s4, s1, s2
     slli s4, s4, 2              # a frame's bytes
     mul a1, s4, s3
@@ -62,6 +73,25 @@ sys_sprite_draw:
     mul t1, t0, s4
     addi s5, s0, JAB_SPRITE_PIXELS
     add s5, s5, t1              # the frame's first pixel
+    # the span table, after every frame's pixels, and this frame's rows
+    # of it
+    la t1, sprite_flags
+    ld t1, 0(t1)
+    andi t1, t1, JAB_SPRITE_SPANNED
+    beqz t1, 1f
+    mul t1, s4, s3
+    addi t1, t1, JAB_SPRITE_PIXELS
+    add a0, s0, t1
+    mul a1, s2, s3
+    slli a1, a1, 2
+    call buffer_bounds
+    ld t0, 88(sp)
+    mul t0, t0, s2
+    slli t0, t0, 2
+    add a0, a0, t0
+    la t1, sprite_spans_row
+    sd a0, 0(t1)
+1:
     ld s6, 120(sp)              # the scale
     li a0, 2
     li t0, JAB_SPRITE_SCALE_MAX
@@ -78,6 +108,8 @@ sys_sprite_draw:
     divu s9, t0, s7             # a drawn column to a source one, 16.16
     slli t0, s2, 16
     divu s10, t0, s8            # a drawn row to a source one
+    la t0, sprite_stepabs
+    sd s9, 0(t0)
     # what a flip reads from: the frame's last column and row
     addi t0, s1, -1
     la t1, sprite_last_col
@@ -85,26 +117,33 @@ sys_sprite_draw:
     addi t0, s2, -1
     la t1, sprite_last_row
     sd t0, 0(t1)
-    # the pose: the flips, and the angle brought into a turn
+    # the pose: the flips, whether the draw is solid, and the angle
+    # brought into a turn
     ld t0, 128(sp)
     srli t1, t0, 16
-    andi t1, t1, 3
-    la t2, sprite_flips
-    sd t1, 0(t2)
+    andi t2, t1, 3
+    la t3, sprite_flips
+    sd t2, 0(t3)
+    andi t2, t1, 4
+    la t3, sprite_solid
+    sd t2, 0(t3)
     li t1, 0xffff
     and t0, t0, t1
     li t1, 360
     remu t0, t0, t1
     la t2, sprite_angle
     sd t0, 0(t2)
-    # the tint's channels, or a mark that there is no tinting
+    # the tint's channels, or a mark that there is no tinting; the tint
+    # whole is what a solid draw writes
     ld s11, 112(sp)
     li t0, 0xffffff
     and t1, s11, t0
+    la t2, sprite_solid_word
+    sd t1, 0(t2)
     xor t1, t1, t0              # 0 when the tint is white
     la t2, sprite_tinted
     sd t1, 0(t2)
-    beqz t1, 1f
+    beqz t1, 2f
     srli t0, s11, 16
     andi t0, t0, 0xff
     la t1, sprite_tint_r
@@ -116,7 +155,7 @@ sys_sprite_draw:
     andi t0, s11, 0xff
     la t1, sprite_tint_b
     sd t0, 0(t1)
-1:
+2:
     slli s4, s1, 2              # a source row's bytes
     la t0, sprite_angle
     ld t0, 0(t0)
@@ -124,25 +163,27 @@ sys_sprite_draw:
     # unturned: the drawn rectangle, clipped to the screen
     ld s0, 96(sp)               # x
     ld s1, 104(sp)              # y
+    la t0, sprite_x
+    sd s0, 0(t0)
     mv s2, s0
-    bgez s2, 2f
+    bgez s2, 3f
     li s2, 0
-2:
+3:
     add s3, s0, s7
     li t0, JAB_DISPLAY_WIDTH
-    ble s3, t0, 3f
+    ble s3, t0, 4f
     mv s3, t0
-3:
+4:
     bge s2, s3, 9f              # nothing of it is on the screen
     mv s7, s1
-    bgez s7, 4f
+    bgez s7, 5f
     li s7, 0
-4:
+5:
     add s6, s1, s8
     li t0, JAB_DISPLAY_HEIGHT
-    ble s6, t0, 5f
+    ble s6, t0, 6f
     mv s6, t0
-5:
+6:
     bge s7, s6, 9f
     # The source position runs along with the drawn one as a 16.16
     # accumulator, a step a pixel; a flip runs it backwards from the
@@ -153,7 +194,7 @@ sys_sprite_draw:
     la t0, sprite_flips
     ld t0, 0(t0)
     andi t1, t0, 1
-    beqz t1, 51f
+    beqz t1, 61f
     la t1, sprite_last_col
     ld t1, 0(t1)
     addi t1, t1, 1
@@ -161,11 +202,11 @@ sys_sprite_draw:
     addi t1, t1, -1
     sub s0, t1, s0
     neg s9, s9
-51:
+61:
     sub t1, s7, s1
     mul s1, t1, s10             # the first drawn row's source row
     andi t1, t0, 2
-    beqz t1, 52f
+    beqz t1, 62f
     la t1, sprite_last_row
     ld t1, 0(t1)
     addi t1, t1, 1
@@ -173,7 +214,7 @@ sys_sprite_draw:
     addi t1, t1, -1
     sub s1, t1, s1
     neg s10, s10
-52:
+62:
     sub s3, s3, s2              # the drawn columns
     sub s6, s6, s7              # and rows
     li t0, JAB_DISPLAY_PITCH
@@ -181,34 +222,114 @@ sys_sprite_draw:
     slli t1, s2, 2
     add t0, t0, t1
     li t1, JAB_DISPLAY_BASE
+    mv s7, s2                   # the first drawn column
     add s2, t0, t1              # the row's first screen pixel
     # the rows: s6 left, s2 the screen row, s1 the source row's
-    # position, s11 the source row; the pixels: s8 left, a2 the screen
-    # pixel, a3 the source column's position, a1 the source pixel
-6:
+    # position, s11 the source row, s7 the first drawn column and s3
+    # how many; the pixels: s8 left, a2 the screen pixel, a3 the source
+    # column's position, a1 the source pixel
+7:
     srli t0, s1, 16
-    mul t0, t0, s4
-    add s11, s5, t0
+    mul t1, t0, s4
+    add s11, s5, t1
+    la t1, sprite_flags
+    ld t1, 0(t1)
+    andi t1, t1, JAB_SPRITE_SPANNED
+    beqz t1, 75f
+    # the row's span: its first and last opaque columns, mirrored for a
+    # flip, then the drawn columns whose source columns fall inside it,
+    # the first at or past the span's first and the end past its last,
+    # clipped to what is on the screen
+    la t1, sprite_spans_row
+    ld t1, 0(t1)
+    slli t2, t0, 2
+    add t1, t1, t2
+    lbu t2, 0(t1)
+    lbu t3, 1(t1)
+    slli t3, t3, 8
+    or t2, t2, t3               # the first
+    lbu t3, 2(t1)
+    lbu t4, 3(t1)
+    slli t4, t4, 8
+    or t3, t3, t4               # the last
+    bgtu t2, t3, 8f             # a row with nothing in it
+    la t4, sprite_flips
+    ld t4, 0(t4)
+    andi t4, t4, 1
+    beqz t4, 71f
+    la t4, sprite_last_col
+    ld t4, 0(t4)
+    sub t5, t4, t3
+    sub t3, t4, t2
+    mv t2, t5
+71:
+    la t4, sprite_stepabs
+    ld t4, 0(t4)
+    slli t2, t2, 16
+    add t2, t2, t4
+    addi t2, t2, -1
+    divu t2, t2, t4             # the first drawn column, from x
+    addi t3, t3, 1
+    slli t3, t3, 16
+    add t3, t3, t4
+    addi t3, t3, -1
+    divu t3, t3, t4             # the end, from x
+    la t4, sprite_x
+    ld t4, 0(t4)
+    add t2, t2, t4
+    add t3, t3, t4
+    bge t2, s7, 72f
+    mv t2, s7
+72:
+    add t4, s7, s3
+    ble t3, t4, 73f
+    mv t3, t4
+73:
+    bge t2, t3, 8f
+    sub s8, t3, t2              # the pixels
+    sub t4, t2, s7              # how far in the row starts
+    mul a3, t4, s9
+    add a3, a3, s0
+    slli t4, t4, 2
+    add a2, s2, t4
+    j 76f
+75:
     mv a2, s2
     mv a3, s0
     mv s8, s3
-7:
+76:
+    la t0, sprite_solid
+    ld t0, 0(t0)
+    bnez t0, 78f
+761:
     srli t0, a3, 16
     slli t0, t0, 2
     add a1, s11, t0
     lbu a7, 3(a1)
-    beqz a7, 71f
+    beqz a7, 77f
     call sprite_blend
-71:
+77:
     add a3, a3, s9
     addi a2, a2, 4
     addi s8, s8, -1
-    bnez s8, 7b
+    bnez s8, 761b
+    j 8f
+78:
+    # solid: the tint over every pixel of the row's stretch, no source
+    # read at all
+    la t0, sprite_solid_word
+    ld t0, 0(t0)
+79:
+    sw t0, 0(a2)
+    addi a2, a2, 4
+    addi s8, s8, -1
+    bnez s8, 79b
+8:
     add s1, s1, s10
     li t0, JAB_DISPLAY_PITCH
     add s2, s2, t0
     addi s6, s6, -1
-    bnez s6, 6b
+    bnez s6, 7b
     li a0, 0
 9:
     sd a0, 80(sp)
@@ -372,6 +493,14 @@ sprite_turned:
     add t0, t0, t1
     li t1, JAB_DISPLAY_BASE
     add a2, t0, t1
+    la t0, sprite_solid
+    ld t0, 0(t0)
+    beqz t0, 13f
+    la t0, sprite_solid_word
+    ld t0, 0(t0)
+    sw t0, 0(a2)
+    j 18f
+13:
     lbu a7, 3(a1)
     call sprite_blend
 18:
@@ -395,6 +524,21 @@ sprite_blend:
     la t1, sprite_tinted
     ld t1, 0(t1)
     beqz t1, 1f
+    # a white pixel under a tint is the tint, exactly what the
+    # multiplies would give, and the recolour rule makes every pixel of
+    # such a sprite white, so the multiplies are skipped for it
+    and t2, a4, a5
+    and t2, t2, a6
+    li t3, 255
+    bne t2, t3, 11f
+    la t1, sprite_tint_b
+    ld a4, 0(t1)
+    la t1, sprite_tint_g
+    ld a5, 0(t1)
+    la t1, sprite_tint_r
+    ld a6, 0(t1)
+    j 1f
+11:
     la t1, sprite_tint_b
     ld t1, 0(t1)
     mul a4, a4, t1
@@ -437,6 +581,74 @@ sprite_blend:
     or a4, a4, a6
     sw a4, 0(a2)
 9:
+    ret
+
+# sprite_spans: a0 is a sprite record whose header and pixels are in
+# place. Writes the span table after the pixels, two 16-bit columns per
+# row of every frame, the first and the last with any alpha, the first
+# past the last for a row with none, and sets JAB_SPRITE_SPANNED in
+# the flags. What png.S calls once a decode is done.
+.global sprite_spans
+sprite_spans:
+    addi sp, sp, -48
+    sd ra, 40(sp)
+    sd a0, 0(sp)
+    addi a0, a0, JAB_SPRITE_WIDTH
+    call sprite_le32
+    sd a0, 8(sp)                # the width
+    ld a0, 0(sp)
+    addi a0, a0, JAB_SPRITE_HEIGHT
+    call sprite_le32
+    sd a0, 16(sp)               # the height
+    ld a0, 0(sp)
+    addi a0, a0, JAB_SPRITE_FRAMES
+    call sprite_le32
+    ld t1, 16(sp)
+    mul t1, t1, a0              # the rows, all frames
+    ld t2, 8(sp)
+    ld t0, 0(sp)
+    addi t0, t0, JAB_SPRITE_PIXELS
+    slli t3, t2, 2              # a row's bytes
+    mul t4, t3, t1
+    add t4, t4, t0              # the table, after the pixels
+1:
+    beqz t1, 3f
+    mv t5, t2                   # the first, none yet
+    li t6, 0                    # the last
+    li a1, 0                    # the column
+    addi a2, t0, 3              # its alpha
+2:
+    lbu a3, 0(a2)
+    beqz a3, 21f
+    mv t6, a1
+    bltu a1, t5, 22f
+    j 21f
+22:
+    mv t5, a1
+21:
+    addi a2, a2, 4
+    addi a1, a1, 1
+    bltu a1, t2, 2b
+    sb t5, 0(t4)
+    srli a3, t5, 8
+    sb a3, 1(t4)
+    sb t6, 2(t4)
+    srli a3, t6, 8
+    sb a3, 3(t4)
+    addi t4, t4, 4
+    add t0, t0, t3
+    addi t1, t1, -1
+    j 1b
+3:
+    ld t0, 0(sp)
+    addi t0, t0, JAB_SPRITE_FLAGS
+    li t1, JAB_SPRITE_SPANNED
+    sb t1, 0(t0)
+    sb zero, 1(t0)
+    sb zero, 2(t0)
+    sb zero, 3(t0)
+    ld ra, 40(sp)
+    addi sp, sp, 48
     ret
 
 # sprite_trig: a0 is an angle, 0 to 359 degrees; a0 becomes its sine
@@ -519,6 +731,18 @@ sprite_tint_g:
 sprite_tint_b:
     .skip 8
 sprite_flips:
+    .skip 8
+sprite_solid:
+    .skip 8
+sprite_solid_word:
+    .skip 8
+sprite_flags:
+    .skip 8
+sprite_spans_row:
+    .skip 8
+sprite_stepabs:
+    .skip 8
+sprite_x:
     .skip 8
 sprite_angle:
     .skip 8

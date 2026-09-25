@@ -36,5 +36,10 @@ test category="" name="" *args:
 run category name *args:
     ^nu "{{jab}}" workspace run "{{here}}" "{{category}}" "{{name}}" {{args}}
 
+# Watch the running Jab QEMU in this host's own top, per thread where
+# the host can: `just watch` from any shell while a program runs
+watch:
+    ^nu "{{jab}}" watch
+
 clean:
     rm -rf "{{here}}/.target"

@@ -66,28 +66,48 @@
 .set JAB_SYS_SPRITE_PNG, 27
 .set JAB_SYS_SPRITE_DRAW, 28
 .set JAB_SYS_SPRITE_LOAD, 29
+.set JAB_SYS_DISPLAY_FLIP_RECTS, 30
 
 # A sprite: frames of pixels in the framebuffer's own format, which the
 # program owns and jab.sprite.draw blends onto the screen. The record is
-# a header of three 32-bit fields - the width of one frame, the height,
-# and the frame count - and then the pixels at JAB_SPRITE_PIXELS, frame
-# after frame, each frame its rows top to bottom, so frame k is one
-# contiguous block. A pixel is a little-endian word 0xAARRGGBB: the
+# a header of four 32-bit fields - the width of one frame, the height,
+# the frame count, and flags - and then the pixels at JAB_SPRITE_PIXELS,
+# frame after frame, each frame its rows top to bottom, so frame k is
+# one contiguous block. A pixel is a little-endian word 0xAARRGGBB: the
 # framebuffer's blue, green, red, and the unused byte carrying alpha, 0
 # clear through 255 solid. A sprite of one frame is a plain image.
 #
+# With JAB_SPRITE_SPANNED in the flags, a table follows the pixels: for
+# every row of every frame, in order, two 16-bit columns, the first and
+# the last that carry any alpha, the first past the last in a row with
+# none; the draw then walks only those columns, which is what makes a
+# thin figure in a wide frame cheap. jab.sprite.png and jab.sprite.load
+# write the table and set the flag; a sprite written by hand may leave
+# the flags 0 and is drawn whole.
+#
 # jab.sprite.png fills a sprite from a PNG the program holds, a sheet of
 # frames stacked top to bottom, and jab.sprite.load from a directory of
-# PNGs on a romfs disk, one frame each; both decode in place, so the
-# buffer holding the record needs JAB_SPRITE_PIXELS plus four bytes a
-# pixel and one byte a row of every frame: for N frames of W by H,
-# JAB_SPRITE_PIXELS + N * (W * H * 4 + H). A program that knows its
-# asset writes that down with .set; one that does not asks jab.png.size
-# first. Declare the record on a 4-byte boundary, as its fields want.
+# PNGs on a romfs disk, one frame each; both decode in place and add the
+# table, so the buffer holding the record needs JAB_SPRITE_PIXELS plus
+# four bytes a pixel and four bytes a row of every frame: for N frames
+# of W by H, JAB_SPRITE_PIXELS + N * H * (W * 4 + 4). A program that
+# knows its asset writes that down with .set; one that does not asks
+# jab.png.size first. Declare the record on a 4-byte boundary, as its
+# fields want.
 .set JAB_SPRITE_WIDTH, 0
 .set JAB_SPRITE_HEIGHT, 4
 .set JAB_SPRITE_FRAMES, 8
-.set JAB_SPRITE_PIXELS, 12
+.set JAB_SPRITE_FLAGS, 12
+.set JAB_SPRITE_PIXELS, 16
+.set JAB_SPRITE_SPANNED, 1
+
+# A rectangle of the screen, as jab.display.flip.rects takes them: x,
+# y, width, height, each 32 bits, JAB_RECT_SIZE bytes in all.
+.set JAB_RECT_X, 0
+.set JAB_RECT_Y, 4
+.set JAB_RECT_WIDTH, 8
+.set JAB_RECT_HEIGHT, 12
+.set JAB_RECT_SIZE, 16
 
 # jab.sprite.draw's tint is a colour, 0x00RRGGBB, that each channel of a
 # sprite's pixel is multiplied by, over 255, before it is blended, so
@@ -99,12 +119,19 @@
 # and mirrors the frame: its low sixteen bits are an angle in degrees,
 # clockwise, and JAB_SPRITE_FLIP_H and JAB_SPRITE_FLIP_V mirror it left
 # to right and top to bottom, applied to the frame before the turn; the
-# turn is about the scaled frame's centre.
+# turn is about the scaled frame's centre. JAB_SPRITE_SOLID in the pose
+# writes the tint over every pixel the frame covers, no alpha and no
+# blend: each row's span for a spanned sprite, the whole frame
+# otherwise; drawing the frame a program drew last time, at the same
+# place, scale, and pose, solid in the background's colour is how it
+# clears that frame at the cost of its shape rather than its box, and
+# a solid draw in any colour is a silhouette.
 .set JAB_SPRITE_PLAIN, 0x00ffffff
 .set JAB_SPRITE_SCALE_ONE, 256
 .set JAB_SPRITE_SCALE_MAX, 65536
 .set JAB_SPRITE_FLIP_H, 0x10000
 .set JAB_SPRITE_FLIP_V, 0x20000
+.set JAB_SPRITE_SOLID, 0x40000
 
 # PNG, as GIMP 3 exports it by default from any image mode: colour types
 # 0 (grey), 2 (RGB), 3 (indexed, with its palette and its transparency),
@@ -298,6 +325,19 @@
 # cheap.
 .macro jab.display.flip.rect
     li a7, JAB_SYS_DISPLAY_FLIP_RECT
+    ecall
+.endm
+
+# jab.display.flip.rects buffer, count: show that many rectangles of
+# the framebuffer, JAB_RECT_SIZE bytes each from the buffer, and
+# nothing else, as one flip: what jab.display.flip.rect is for several
+# changed areas at once, the host copying and painting only what is
+# listed. The same codes, 4 when the count is 0 or any rectangle is
+# empty or reaches outside the screen, in which case nothing is shown.
+.macro jab.display.flip.rects buffer, count
+    mv a1, \count
+    mv a0, \buffer
+    li a7, JAB_SYS_DISPLAY_FLIP_RECTS
     ecall
 .endm
 
@@ -611,15 +651,17 @@
 # clipped. `tint` is a colour the pixels are multiplied by,
 # JAB_SPRITE_PLAIN when left out; `scale` is in 256ths,
 # JAB_SPRITE_SCALE_ONE when left out; `pose` is an angle in degrees with
-# JAB_SPRITE_FLIP_H and JAB_SPRITE_FLIP_V above it, 0 when left out,
-# the turn about the scaled frame's centre with x, y still where the
-# unturned frame's top left would be. All three are registers when
-# given, so a program may vary them at run time. Per pixel, alpha 0 is
-# skipped, 255 copied, and anything between blended over what is there:
-# each channel becomes (s * a + d * (255 - a)) / 255, rounded, with s
-# the sprite's tinted channel and d the screen's. It only draws; the
-# program flips, whole or the rectangle. a0 becomes 0; 1 when the frame
-# is not in the sprite; 2 when the scale is past JAB_SPRITE_SCALE_MAX.
+# JAB_SPRITE_FLIP_H, JAB_SPRITE_FLIP_V, and JAB_SPRITE_SOLID above it, 0
+# when left out, the turn about the scaled frame's centre with x, y
+# still where the unturned frame's top left would be. All three are
+# registers when given, so a program may vary them at run time. Per
+# pixel, alpha 0 is skipped, 255 copied, and anything between blended
+# over what is there: each channel becomes (s * a + d * (255 - a)) /
+# 255, rounded, with s the sprite's tinted channel and d the screen's;
+# solid, the tint is written over every pixel the frame covers instead.
+# It only draws; the program flips, whole or the rectangles. a0 becomes
+# 0; 1 when the frame is not in the sprite; 2 when the scale is past
+# JAB_SPRITE_SCALE_MAX.
 .macro jab.sprite.draw sprite, frame, x, y, tint, scale, pose
     .ifb \pose
     li a6, 0

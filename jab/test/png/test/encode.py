@@ -116,6 +116,18 @@ def native(pixels):
     return out.hex()
 
 
+def spans(pixels):
+    # a row's first and last column with any alpha, little-endian
+    # 16-bit each; the first past the last for a row with none
+    out = bytearray()
+    for row in pixels:
+        cols = [x for x, p in enumerate(row) if p[3] != 0]
+        first = cols[0] if cols else len(row)
+        last = cols[-1] if cols else 0
+        out += struct.pack("<HH", first, last)
+    return out.hex()
+
+
 def cycle_filters(height):
     return [i % 5 for i in range(height)]
 
@@ -145,6 +157,7 @@ def main(directory):
             "width": width,
             "height": height,
             "native": native(pixels) if pixels is not None else "",
+            "spans": spans(pixels) if pixels is not None else "",
         })
 
     w, h = 7, 5
@@ -234,12 +247,13 @@ def main(directory):
     # whose second frame is another size, and one with no 0.png
     def emit_dir(name, frames):
         os.mkdir(f"{directory}/{name}")
-        record = {"name": name, "frames": len(frames), "native": ""}
+        record = {"name": name, "frames": len(frames), "native": "", "spans": ""}
         for k, (fw, fh, extra) in enumerate(frames):
             px, rw = rgba_image(rng, fw, fh)
             with open(f"{directory}/{name}/{k + extra}.png", "wb") as f:
                 f.write(encode(fw, fh, 8, 6, rw, cycle_filters(fh)))
             record["native"] += native(px)
+            record["spans"] += spans(px)
             if k == 0:
                 record["width"], record["height"] = fw, fh
         dirs.append(record)

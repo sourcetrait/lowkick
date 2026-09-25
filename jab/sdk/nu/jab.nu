@@ -383,6 +383,28 @@ def wait-for-file [path: path]: nothing -> nothing {
     }
 }
 
+# The Jab QEMU processes on this host, by their command line, which
+# every Jab line marks with `-name jab`.
+def jab-pids []: nothing -> list<int> {
+    ps -l | where {|p| ($p.command | str contains "qemu-system-riscv64") and ($p.command | str contains "-name jab") } | get pid
+}
+
+# Watch the running Jab QEMU in the host's own top, whatever shell this
+# is run from: on Linux per thread, where the harts (`CPU 0/TCG` and
+# on) and the main loop (under the process name, where the host's copy
+# and paint land) show by name; on macOS the process, since its top has
+# no thread view. Ends when top does.
+def "main watch" [] {
+    let pids = (jab-pids)
+    if ($pids | is-empty) { error make {msg: "no jab is running"} }
+    let list = ($pids | each {|p| $p | into string } | str join ",")
+    match $nu.os-info.name {
+        "linux" => { ^top -H -p $list },
+        "macos" => { ^top ...($pids | each {|p| ["-pid" ($p | into string)] } | flatten) },
+        _ => { error make {msg: $"no top here for ($nu.os-info.name); the jab processes are ($list)"} },
+    }
+}
+
 # The nearest parent of `dir` holding workspace.jab.toml, or null.
 def workspace-dir [dir: path]: nothing -> oneof<string, nothing> {
     mut d = ($dir | path expand)
@@ -683,5 +705,5 @@ def "main clean" [dir: path, --kernel] {
 }
 
 def main [] {
-    print "nu jab.nu <build|test|clean> <dir> [--kernel] [--set names]; nu jab.nu run <dir> [--set names] [--api]; nu jab.nu workspace <build|test|run> <ws> [category [name]] [--set names] [--api]"
+    print "nu jab.nu <build|test|clean> <dir> [--kernel] [--set names]; nu jab.nu run <dir> [--set names] [--api]; nu jab.nu workspace <build|test|run> <ws> [category [name]] [--set names] [--api]; nu jab.nu watch"
 }

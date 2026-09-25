@@ -73,11 +73,15 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     for l in ($lines | drop 1) {
         if ($l | str starts-with "s ") or ($l | str starts-with "l ") {
             if $current != null { $answers = ($answers | append $current) }
-            $current = { s: $l, p: "", hex: "" }
+            $current = { s: $l, p: "", hex: "", spans: "", flags: "" }
         } else if ($l | str starts-with "p ") {
             $current.p = $l
         } else if ($l | str starts-with "x ") {
             $current.hex = ($current.hex + ($l | str substring 2..))
+        } else if ($l | str starts-with "y ") {
+            $current.spans = ($current.spans + ($l | str substring 2..))
+        } else if ($l | str starts-with "f ") {
+            $current.flags = ($l | str substring 2..)
         }
     }
     if $current != null { $answers = ($answers | append $current) }
@@ -97,6 +101,8 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
             let fh = ($fixture.height // $want.frames)
             assert equal $got.p $"p 0 ($fixture.width) ($fh) ($want.frames)" $"($want.name): jab.sprite.png with ($want.frames) frames"
             compare-pixels $want.name $got.hex $fixture.native $fixture.width
+            assert equal $got.spans $fixture.spans $"($want.name): the span table, first and last opaque column per row"
+            assert equal $got.flags "1" $"($want.name): the record is flagged spanned"
             $decoded += 1
             $pixels += ($fixture.width * $fixture.height)
         } else {
@@ -112,6 +118,8 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
             let dir = ($made.dirs | where name == $want.name | first)
             assert equal $got.s $"l 0 ($dir.width) ($dir.height) ($dir.frames)" $"($want.name): jab.sprite.load"
             compare-pixels $want.name $got.hex $dir.native $dir.width
+            assert equal $got.spans $dir.spans $"($want.name): the span table of every frame"
+            assert equal $got.flags "1" $"($want.name): the record is flagged spanned"
             $loaded += 1
             $pixels += ($dir.width * $dir.height * $dir.frames)
         } else {

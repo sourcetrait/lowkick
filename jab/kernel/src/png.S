@@ -134,6 +134,8 @@ sys_sprite_png:
     ld t0, 80(sp)
     addi a1, t0, JAB_SPRITE_FRAMES
     call png_le32_store
+    ld a0, 80(sp)
+    call sprite_spans
     li a0, JAB_PNG_OK
 9:
     sd a0, 80(sp)
@@ -238,6 +240,8 @@ sys_sprite_load:
     ld t0, 80(sp)
     addi a1, t0, JAB_SPRITE_FRAMES
     call png_le32_store
+    ld a0, 80(sp)
+    call sprite_spans
     li a0, JAB_PNG_OK
     j 9f
 7:
@@ -414,15 +418,16 @@ png_le32_store:
 
 # png_room: a0 is a width, a1 a height (of the whole sheet), a2 how
 # many bytes the record's buffer holds. a0 becomes JAB_PNG_OK when the
-# buffer reaches the rule, four bytes a pixel and a byte a row after
-# the header, or JAB_PNG_SIZE.
+# buffer reaches the rule, four bytes a pixel and four bytes a row
+# after the header - the row's filter byte on the way in, its span on
+# the way out - or JAB_PNG_SIZE.
 png_room:
     li t2, PNG_SIDE_LIMIT
     bgeu a0, t2, 8f
     bgeu a1, t2, 8f
-    mul t4, a0, a1
+    addi t4, a0, 1
+    mul t4, t4, a1
     slli t4, t4, 2
-    add t4, t4, a1
     addi t4, t4, JAB_SPRITE_PIXELS
     bltu a2, t4, 8f
     li a0, JAB_PNG_OK

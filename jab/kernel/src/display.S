@@ -6,14 +6,22 @@
 # The display: QEMU's virtio-gpu in 2D over mmio. One resource, the
 # framebuffer at JAB_DISPLAY_BASE, is the program's to draw into; the
 # kernel attaches it as the resource's backing, sets it as scanout 0,
-# and on a flip transfers the whole of it, or the rectangle the program
-# names, to the host and flushes it. The screen console draws text into
-# the same framebuffer with the font in font.S and transfers only the
-# rows it touched. Commands run one at
-# a time through the control queue, the hart halted until the device
-# answers; the response's type says whether the device took the
-# command.
+# and on a flip transfers the whole of it, or the rectangles the
+# program names, to the host and flushes them. The screen console draws
+# text into the same framebuffer with the font in font.S and transfers
+# only the rows it touched. Commands go through the control queue in
+# batches, a chain of two descriptors each, one notify and one wait for
+# the whole batch with the hart halted until the device has answered
+# every one, since each wait costs a halt and a wake of every hart and
+# a rectangle list is dozens of commands; a single command is a batch of
+# one. The queue is the wide one of virtio.inc, so a batch holds up to
+# GPUQ_CHAINS commands. Each response's type says whether the device
+# took the command.
 .set DISPLAY_RESOURCE, 1
+.set GPU_CMD_BYTES, 64
+.set GPU_RESP_BYTES, 24
+# a rectangle is two commands, so a batch presents this many
+.set GPU_RECTS_PER_BATCH, (GPUQ_CHAINS / 2)
 
 # The console: cells of FONT_WIDTH by FONT_HEIGHT, each glyph a 16-bit
 # row per pixel row with the glyph in the high FONT_WIDTH bits, white
@@ -125,6 +133,334 @@ sys_display_flip_rect:
     sd a0, 80(sp)
     j trap_return
 
+# sys_display_flip_rects (jab.display.flip.rects): show the a1
+# rectangles at a0, JAB_RECT_SIZE bytes each, as one flip. Every
+# rectangle is checked before any is shown. a0 becomes 0; 1 when the
+# frame is early, nothing transferred; 2 when the display is not open;
+# 3 when the device refused a command; 4 when the count is 0 or a
+# rectangle is empty or reaches outside the screen.
+.global sys_display_flip_rects
+sys_display_flip_rects:
+    la t0, display_state
+    ld t0, 0(t0)
+    li a0, 2
+    beqz t0, 9f
+    ld s0, 80(sp)               # the rectangles
+    ld s1, 88(sp)               # how many
+    li a0, 4
+    beqz s1, 9f
+    mv a0, s0
+    slli a1, s1, 4
+    call buffer_bounds
+    mv s2, s0
+    mv s3, s1
+1:
+    lwu t1, JAB_RECT_X(s2)
+    lwu t2, JAB_RECT_Y(s2)
+    lwu t3, JAB_RECT_WIDTH(s2)
+    lwu t4, JAB_RECT_HEIGHT(s2)
+    li a0, 4
+    beqz t3, 9f
+    beqz t4, 9f
+    li t6, JAB_DISPLAY_WIDTH
+    bgtu t3, t6, 9f
+    add t5, t1, t3
+    bgtu t5, t6, 9f
+    li t6, JAB_DISPLAY_HEIGHT
+    bgtu t4, t6, 9f
+    add t5, t2, t4
+    bgtu t5, t6, 9f
+    addi s2, s2, JAB_RECT_SIZE
+    addi s3, s3, -1
+    bnez s3, 1b
+    call frame_ready
+    beqz a0, 8f
+    mv a0, s0
+    mv a1, s1
+    call display_present_rects
+    bnez a0, 7f
+    call frame_flipped
+    li a0, 0
+    j 9f
+7:
+    li a0, 3
+    j 9f
+8:
+    li a0, 1
+9:
+    sd a0, 80(sp)
+    j trap_return
+
+# display_present_rects: transfer the a1 rectangles at a0, JAB_RECT_SIZE
+# bytes each, to the host and flush them, in batches of
+# GPU_RECTS_PER_BATCH with one wait each. Returns 0, or 1 when a
+# command fails.
+.global display_present_rects
+display_present_rects:
+    addi sp, sp, -48
+    sd ra, 40(sp)
+    sd s0, 32(sp)
+    sd s1, 24(sp)
+    sd s2, 16(sp)
+    sd s3, 8(sp)
+    mv s0, a0                   # the next rectangle
+    mv s1, a1                   # how many are left
+1:
+    beqz s1, 8f
+    li s2, GPU_RECTS_PER_BATCH
+    bgeu s1, s2, 2f
+    mv s2, s1                   # this batch
+2:
+    la t0, gpu_queue
+    sd zero, GPUQ_PENDING(t0)
+    li s3, 0                    # the rectangle in the batch
+3:
+    bgeu s3, s2, 4f
+    slli t0, s3, 4
+    add t0, t0, s0
+    lwu a0, JAB_RECT_X(t0)
+    lwu a1, JAB_RECT_Y(t0)
+    lwu a2, JAB_RECT_WIDTH(t0)
+    lwu a3, JAB_RECT_HEIGHT(t0)
+    call gpu_rect_commands
+    addi s3, s3, 1
+    j 3b
+4:
+    call gpu_batch_run
+    bnez a0, 7f
+    slli t0, s2, 4
+    add s0, s0, t0
+    sub s1, s1, s2
+    j 1b
+7:
+    li a0, 1
+    j 9f
+8:
+    li a0, 0
+9:
+    ld ra, 40(sp)
+    ld s0, 32(sp)
+    ld s1, 24(sp)
+    ld s2, 16(sp)
+    ld s3, 8(sp)
+    addi sp, sp, 48
+    ret
+
+# gpu_rect_commands: add the transfer and the flush of the rectangle at
+# a0, a1 of a2 by a3 to the pending batch, as two chains.
+gpu_rect_commands:
+    addi sp, sp, -48
+    sd ra, 40(sp)
+    sd a0, 32(sp)
+    sd a1, 24(sp)
+    sd a2, 16(sp)
+    sd a3, 8(sp)
+    li a0, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D
+    call gpu_batch_command
+    ld t1, 32(sp)
+    ld t2, 24(sp)
+    ld t3, 16(sp)
+    ld t4, 8(sp)
+    sw t1, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_X)(a0)
+    sw t2, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_Y)(a0)
+    sw t3, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_WIDTH)(a0)
+    sw t4, (VIRTIO_GPU_TRANSFER_RECT + VIRTIO_GPU_RECT_HEIGHT)(a0)
+    li t5, JAB_DISPLAY_PITCH
+    mul t5, t5, t2
+    slli t6, t1, 2
+    add t5, t5, t6
+    sd t5, VIRTIO_GPU_TRANSFER_OFFSET(a0)
+    li t5, DISPLAY_RESOURCE
+    sw t5, VIRTIO_GPU_TRANSFER_RESOURCE_ID(a0)
+    li a1, VIRTIO_GPU_TRANSFER_SIZE
+    call gpu_batch_add
+    li a0, VIRTIO_GPU_CMD_RESOURCE_FLUSH
+    call gpu_batch_command
+    ld t1, 32(sp)
+    ld t2, 24(sp)
+    ld t3, 16(sp)
+    ld t4, 8(sp)
+    sw t1, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_X)(a0)
+    sw t2, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_Y)(a0)
+    sw t3, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_WIDTH)(a0)
+    sw t4, (VIRTIO_GPU_FLUSH_RECT + VIRTIO_GPU_RECT_HEIGHT)(a0)
+    li t5, DISPLAY_RESOURCE
+    sw t5, VIRTIO_GPU_FLUSH_RESOURCE_ID(a0)
+    li a1, VIRTIO_GPU_FLUSH_SIZE
+    call gpu_batch_add
+    ld ra, 40(sp)
+    addi sp, sp, 48
+    ret
+
+# gpu_batch_command: a0 becomes the pending chain's command buffer,
+# zeroed, with its type set to a0 as given.
+gpu_batch_command:
+    la t0, gpu_queue
+    ld t1, GPUQ_PENDING(t0)
+    li t2, GPU_CMD_BYTES
+    mul t1, t1, t2
+    la t0, gpu_batch_cmds
+    add t0, t0, t1
+    sd zero, 0(t0)
+    sd zero, 8(t0)
+    sd zero, 16(t0)
+    sd zero, 24(t0)
+    sd zero, 32(t0)
+    sd zero, 40(t0)
+    sd zero, 48(t0)
+    sd zero, 56(t0)
+    sw a0, VIRTIO_GPU_HDR_TYPE(t0)
+    mv a0, t0
+    ret
+
+# gpu_batch_add: the pending chain's command, a1 bytes of it, and its
+# response buffer become descriptors 2p and 2p + 1, offered in the
+# available ring's next slot; the chain is then pending.
+gpu_batch_add:
+    la t0, gpu_queue
+    ld t1, GPUQ_PENDING(t0)
+    slli t2, t1, 1              # the descriptor pair
+    slli t3, t2, 4
+    add t3, t3, t0              # descriptor 2p
+    li t4, GPU_CMD_BYTES
+    mul t4, t4, t1
+    la t5, gpu_batch_cmds
+    add t5, t5, t4
+    sd t5, (GPUQ_DESC + VIRTQ_DESC_ADDR)(t3)
+    sw a1, (GPUQ_DESC + VIRTQ_DESC_LEN)(t3)
+    li t4, VIRTQ_DESC_F_NEXT
+    sh t4, (GPUQ_DESC + VIRTQ_DESC_FLAGS)(t3)
+    addi t4, t2, 1
+    sh t4, (GPUQ_DESC + VIRTQ_DESC_NEXT)(t3)
+    addi t3, t3, VIRTQ_DESC_SIZE
+    li t4, GPU_RESP_BYTES
+    mul t4, t4, t1
+    la t5, gpu_batch_resps
+    add t5, t5, t4
+    sd t5, (GPUQ_DESC + VIRTQ_DESC_ADDR)(t3)
+    li t4, GPU_RESP_BYTES
+    sw t4, (GPUQ_DESC + VIRTQ_DESC_LEN)(t3)
+    li t4, VIRTQ_DESC_F_WRITE
+    sh t4, (GPUQ_DESC + VIRTQ_DESC_FLAGS)(t3)
+    sh zero, (GPUQ_DESC + VIRTQ_DESC_NEXT)(t3)
+    # the available ring's slot for it: the index plus the pending count
+    lhu t3, (GPUQ_AVAIL + VIRTQ_AVAIL_IDX)(t0)
+    add t3, t3, t1
+    andi t3, t3, GPUQ_SIZE - 1
+    slli t3, t3, 1
+    add t3, t3, t0
+    sh t2, (GPUQ_AVAIL + VIRTQ_AVAIL_RING)(t3)
+    addi t1, t1, 1
+    sd t1, GPUQ_PENDING(t0)
+    ret
+
+# gpu_batch_run: publish the pending chains, notify the device, halt
+# until it has used every one, and read their responses. a0 becomes 0
+# when each answered VIRTIO_GPU_RESP_OK_NODATA, else 1.
+gpu_batch_run:
+    addi sp, sp, -16
+    sd ra, 8(sp)
+    la t0, gpu_queue
+    ld t1, GPUQ_PENDING(t0)
+    beqz t1, 8f
+    fence w, w
+    lhu t2, (GPUQ_AVAIL + VIRTQ_AVAIL_IDX)(t0)
+    add t2, t2, t1
+    sh t2, (GPUQ_AVAIL + VIRTQ_AVAIL_IDX)(t0)
+    fence rw, rw
+    la t2, gpu_base
+    ld t2, 0(t2)
+    sw zero, VIRTIO_MMIO_QUEUE_NOTIFY(t2)
+    call gpu_wait_batch
+    la t0, gpu_queue
+    ld t1, GPUQ_PENDING(t0)
+    ld t2, GPUQ_LAST_USED(t0)
+    add t2, t2, t1
+    li t3, 0xffff
+    and t2, t2, t3
+    sd t2, GPUQ_LAST_USED(t0)
+    sd zero, GPUQ_PENDING(t0)
+    # every response
+    la t2, gpu_batch_resps
+    li t3, VIRTIO_GPU_RESP_OK_NODATA
+1:
+    beqz t1, 8f
+    lwu t4, VIRTIO_GPU_HDR_TYPE(t2)
+    bne t4, t3, 7f
+    addi t2, t2, GPU_RESP_BYTES
+    addi t1, t1, -1
+    j 1b
+7:
+    li a0, 1
+    j 9f
+8:
+    li a0, 0
+9:
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# gpu_wait_batch: halt until the GPU queue's used index has moved past
+# what the kernel last saw by the pending count, waking on the
+# transport's line, which is serviced before returning.
+gpu_wait_batch:
+    addi sp, sp, -16
+    sd ra, 8(sp)
+    li t4, SIE_SEIE
+    csrs sie, t4
+1:
+    la t0, gpu_queue
+    fence rw, rw
+    lhu t1, (GPUQ_USED + VIRTQ_USED_IDX)(t0)
+    ld t2, GPUQ_LAST_USED(t0)
+    ld t3, GPUQ_PENDING(t0)
+    add t2, t2, t3
+    li t3, 0xffff
+    and t2, t2, t3
+    beq t1, t2, 2f
+    wfi
+    call plic_service
+    j 1b
+2:
+    call plic_service
+    li t4, SIE_SEIE
+    csrc sie, t4
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# gpu_queue_setup: give the device's control queue the wide record's
+# rings, GPUQ_SIZE entries. Returns 0, or 1 when the device offers
+# fewer.
+gpu_queue_setup:
+    la t2, gpu_base
+    ld a0, 0(t2)
+    la a2, gpu_queue
+    sw zero, VIRTIO_MMIO_QUEUE_SEL(a0)
+    lwu t0, VIRTIO_MMIO_QUEUE_NUM_MAX(a0)
+    li t1, GPUQ_SIZE
+    bltu t0, t1, 1f
+    sw t1, VIRTIO_MMIO_QUEUE_NUM(a0)
+    addi t0, a2, GPUQ_DESC
+    srli t1, t0, 32
+    sw t0, VIRTIO_MMIO_QUEUE_DESC_LOW(a0)
+    sw t1, VIRTIO_MMIO_QUEUE_DESC_HIGH(a0)
+    addi t0, a2, GPUQ_AVAIL
+    srli t1, t0, 32
+    sw t0, VIRTIO_MMIO_QUEUE_DRIVER_LOW(a0)
+    sw t1, VIRTIO_MMIO_QUEUE_DRIVER_HIGH(a0)
+    addi t0, a2, GPUQ_USED
+    srli t1, t0, 32
+    sw t0, VIRTIO_MMIO_QUEUE_DEVICE_LOW(a0)
+    sw t1, VIRTIO_MMIO_QUEUE_DEVICE_HIGH(a0)
+    li t0, 1
+    sw t0, VIRTIO_MMIO_QUEUE_READY(a0)
+    li a0, 0
+    ret
+1:
+    li a0, 1
+    ret
+
 # sys_display_print (jab.display.print): write the string at a0 to the
 # screen console, opening the display if the program has not. a0 becomes
 # 0, or display_open's code.
@@ -192,11 +528,7 @@ msg_gpu_at:
 .endif
     call virtio_init
     bnez a0, 6f
-    la t0, gpu_base
-    ld a0, 0(t0)
-    li a1, 0
-    la a2, gpu_queue
-    call virtio_queue_setup
+    call gpu_queue_setup
     bnez a0, 6f
     la t0, gpu_base
     ld a0, 0(t0)
@@ -415,22 +747,53 @@ gpu_command:
     sw a0, VIRTIO_GPU_HDR_TYPE(t0)
     ret
 
-# gpu_submit: run the request of a0 bytes and expect a response of type
-# a1. Returns 0 when the device answered with it, else 1. With DEBUG
+# gpu_submit: run the request of a0 bytes in gpu_cmd and expect a
+# response of type a1 in gpu_resp: a batch of one chain, descriptors 0
+# and 1. Returns 0 when the device answered with it, else 1. With DEBUG
 # every command and its answer is reported on the debug channel.
 gpu_submit:
     addi sp, sp, -32
     sd ra, 24(sp)
     sd a1, 16(sp)
-    mv a3, a0
-    la t0, gpu_base
-    ld a0, 0(t0)
-    li a1, 0
-    la a2, gpu_queue
-    la a4, gpu_cmd
-    la a5, gpu_resp
-    li a6, VIRTIO_GPU_DISPLAY_INFO_SIZE
-    call virtio_request
+    la t0, gpu_queue
+    sd zero, GPUQ_PENDING(t0)
+    la t1, gpu_cmd
+    sd t1, (GPUQ_DESC + 0 * VIRTQ_DESC_SIZE + VIRTQ_DESC_ADDR)(t0)
+    sw a0, (GPUQ_DESC + 0 * VIRTQ_DESC_SIZE + VIRTQ_DESC_LEN)(t0)
+    li t1, VIRTQ_DESC_F_NEXT
+    sh t1, (GPUQ_DESC + 0 * VIRTQ_DESC_SIZE + VIRTQ_DESC_FLAGS)(t0)
+    li t1, 1
+    sh t1, (GPUQ_DESC + 0 * VIRTQ_DESC_SIZE + VIRTQ_DESC_NEXT)(t0)
+    la t1, gpu_resp
+    sd t1, (GPUQ_DESC + 1 * VIRTQ_DESC_SIZE + VIRTQ_DESC_ADDR)(t0)
+    li t1, VIRTIO_GPU_DISPLAY_INFO_SIZE
+    sw t1, (GPUQ_DESC + 1 * VIRTQ_DESC_SIZE + VIRTQ_DESC_LEN)(t0)
+    li t1, VIRTQ_DESC_F_WRITE
+    sh t1, (GPUQ_DESC + 1 * VIRTQ_DESC_SIZE + VIRTQ_DESC_FLAGS)(t0)
+    sh zero, (GPUQ_DESC + 1 * VIRTQ_DESC_SIZE + VIRTQ_DESC_NEXT)(t0)
+    lhu t1, (GPUQ_AVAIL + VIRTQ_AVAIL_IDX)(t0)
+    andi t1, t1, GPUQ_SIZE - 1
+    slli t1, t1, 1
+    add t1, t1, t0
+    sh zero, (GPUQ_AVAIL + VIRTQ_AVAIL_RING)(t1)
+    li t1, 1
+    sd t1, GPUQ_PENDING(t0)
+    fence w, w
+    lhu t1, (GPUQ_AVAIL + VIRTQ_AVAIL_IDX)(t0)
+    addi t1, t1, 1
+    sh t1, (GPUQ_AVAIL + VIRTQ_AVAIL_IDX)(t0)
+    fence rw, rw
+    la t1, gpu_base
+    ld t1, 0(t1)
+    sw zero, VIRTIO_MMIO_QUEUE_NOTIFY(t1)
+    call gpu_wait_batch
+    la t0, gpu_queue
+    ld t1, GPUQ_LAST_USED(t0)
+    addi t1, t1, 1
+    li t2, 0xffff
+    and t1, t1, t2
+    sd t1, GPUQ_LAST_USED(t0)
+    sd zero, GPUQ_PENDING(t0)
 .ifdef DEBUG
     la a0, msg_gpu_cmd
     call debug_puts
@@ -619,12 +982,17 @@ console_scroll:
 .section .bss
 .balign 16
 gpu_queue:
-    .skip VQ_BYTES
+    .skip GPUQ_BYTES
 .balign 16
 gpu_cmd:
-    .skip 64
+    .skip GPU_CMD_BYTES
 gpu_resp:
-    .skip 416
+    .skip VIRTIO_GPU_DISPLAY_INFO_SIZE
+.balign 16
+gpu_batch_cmds:
+    .skip GPUQ_CHAINS * GPU_CMD_BYTES
+gpu_batch_resps:
+    .skip GPUQ_CHAINS * GPU_RESP_BYTES
 gpu_base:
     .skip 8
 display_state:

@@ -3,8 +3,9 @@
 # <width> <height>`, then decodes the file into a sprite of that many
 # frames with that much buffer and reports `p <code> <frame width>
 # <height> <frames>`, or `p <code>` when the decode failed; a decoded
-# sprite's pixels follow as hex, 64 bytes to a line as `x <hex>`, for
-# the test to hold against what it put in. Then, for each row of a
+# sprite's pixels follow as hex, 64 bytes to a line as `x <hex>`, then
+# its span table as `y <hex>` and its flags as `f <n>`, for the test to
+# hold against what it put in. Then, for each row of a
 # second table, loads a sprite from a directory of frames straight off
 # the disk and reports `l <code> <frame width> <height> <frames>` the
 # same way. The frames and the capacity come from the tables at run
@@ -173,6 +174,48 @@ report:
     jab.uart.print line
     j 2b
 4:
+    bnez s8, 6f
+    # the span table after the pixels, four bytes a row of every frame,
+    # as `y <hex>` lines, and the flags as `f <n>`
+    la t0, sprite
+    lwu t1, JAB_SPRITE_HEIGHT(t0)
+    lwu t3, JAB_SPRITE_FRAMES(t0)
+    mul s10, t1, t3
+    slli s10, s10, 2            # the table's bytes
+    add s7, s7, s10             # where it ends, from the pixels
+    sub s9, s7, s10             # where it starts
+5:
+    bgeu s9, s7, 51f
+    call line_reset
+    la a0, word_y
+    call line_str
+    li s6, 0
+52:
+    bgeu s9, s7, 53f
+    li t0, COLUMNS
+    bgeu s6, t0, 53f
+    la t0, sprite
+    addi t0, t0, JAB_SPRITE_PIXELS
+    add t0, t0, s9
+    lbu a0, 0(t0)
+    call line_hex
+    addi s9, s9, 1
+    addi s6, s6, 1
+    j 52b
+53:
+    call line_nl
+    jab.uart.print line
+    j 5b
+51:
+    call line_reset
+    la a0, word_f
+    call line_str
+    la t0, sprite
+    lwu a0, JAB_SPRITE_FLAGS(t0)
+    call line_dec
+    call line_nl
+    jab.uart.print line
+6:
     ld ra, 8(sp)
     addi sp, sp, 16
     ret
@@ -379,6 +422,10 @@ word_l:
     .asciz "l "
 word_x:
     .asciz "x "
+word_y:
+    .asciz "y "
+word_f:
+    .asciz "f "
 msg_done:
     .asciz "done\n"
 msg_missing:
