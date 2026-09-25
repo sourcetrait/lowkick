@@ -1,0 +1,37 @@
+# The Jab kernel. Builds src/*.S with src/link.ld into <target>/kernel.
+#
+# Lookups, in order: the workspace is the nearest parent directory
+# holding workspace.jab.toml, if any; the toolchain is RISCV_TOOLCHAIN,
+# else extern/riscv here, else the workspace's extern/riscv, else the
+# tools on PATH; the target is the workspace's .target, else .target
+# here; include paths come from kernel.jab.toml.
+
+set shell := ["nu", "-c"]
+set windows-shell := ["nu", "-c"]
+
+here := justfile_directory()
+manifest := here / "kernel.jab.toml"
+triple := "riscv64-unknown-linux-gnu-"
+
+workspace_dir := shell('mut d = "' + here + '"; mut found = ""; loop { if ($d | path join "workspace.jab.toml" | path exists) { $found = $d; break }; let p = ($d | path dirname); if $p == $d { break }; $d = $p }; print -n $found')
+riscv_toolchain := if env("RISCV_TOOLCHAIN", "") != "" { env("RISCV_TOOLCHAIN") } else { if path_exists(here / "extern" / "riscv") == "true" { here / "extern" / "riscv" } else { if workspace_dir != "" { if path_exists(workspace_dir / "extern" / "riscv") == "true" { workspace_dir / "extern" / "riscv" } else { "" } } else { "" } } }
+riscv_tool := if riscv_toolchain != "" { riscv_toolchain / "bin" / triple } else { triple }
+asm := riscv_tool + "as"
+link := riscv_tool + "ld"
+objdump := riscv_tool + "objdump"
+target := if workspace_dir != "" { workspace_dir / ".target" } else { here / ".target" }
+out := target / "kernel"
+includes := shell('open "' + manifest + '" | get -o includes | default [] | each {|p| $"-I ($p)" } | str join " " | print -n $in')
+link_script := shell('open "' + manifest + '" | get link | print -n $in')
+
+default: build
+
+# Assemble every src/*.S and link them to <target>/kernel/jab.elf
+build:
+    mkdir "{{out}}"
+    for f in (glob src/*.S) { ^"{{asm}}" {{includes}} $f -o ("{{out}}" | path join (($f | path parse | get stem) + ".o")) }
+    ^"{{link}}" -T {{link_script}} -nostdlib ...(glob "{{out}}/*.o") -o "{{out}}/jab.elf"
+    ^"{{objdump}}" -d "{{out}}/jab.elf" | save -f "{{out}}/jab.disas"
+
+clean:
+    rm -rf "{{out}}"

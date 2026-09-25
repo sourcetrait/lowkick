@@ -1,0 +1,3 @@
+name = 'helloworld'
+includes = ['../../../sdk']
+link = '../../../sdk/program.ld'

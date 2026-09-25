@@ -1,62 +1,31 @@
-# LowKick Jab: build the kernel and test programs, run them under QEMU.
-#
-# Needs a riscv64 GNU toolchain and qemu-system-riscv64. The toolchain is
-# found by its install prefix, the directory holding bin/: RISCV_PREFIX
-# if that environment variable is set, else the symlink extern/prefix
-# if it exists (git ignores extern/), else the tools are expected on
-# PATH. Artifacts land under target/, which git ignores.
+# LowKick Jab workspace: calls the kernel's and each program's justfile
+# in turn, the list coming from workspace.jab.toml. Needs nushell, just,
+# a riscv64 GNU toolchain, and qemu-system-riscv64; see kernel/justfile
+# for how the toolchain and the target directory are found.
 
-triple := "riscv64-unknown-linux-gnu-"
-riscv_prefix := if env("RISCV_PREFIX", "") != "" { env("RISCV_PREFIX") } else { if path_exists("extern/prefix") == "true" { "extern/prefix" } else { "" } }
-riscv_tool := if riscv_prefix != "" { riscv_prefix / "bin" / triple } else { triple }
-asm := riscv_tool + "as"
-link := riscv_tool + "ld"
-objcopy := riscv_tool + "objcopy"
-objdump := riscv_tool + "objdump"
-qemu := "qemu-system-riscv64"
-target := "target"
-kernel_dir := target / "kernel"
-program_base := "0x80800000"
-machine := "-machine virt -cpu rv64 -accel tcg -smp 4 -global virtio-mmio.force-legacy=false"
-devices := "-device virtio-gpu-device,xres=1920,yres=1080 -device virtio-keyboard-device -device virtio-tablet-device -device virtio-net-device,netdev=net0 -netdev user,id=net0 -device virtio-sound-device,audiodev=snd0 -audiodev none,id=snd0 -device virtio-rng-device"
+set shell := ["nu", "-c"]
+set windows-shell := ["nu", "-c"]
 
-default: kernel
+here := justfile_directory()
+manifest := here / "workspace.jab.toml"
+kernel_dir := shell('open "' + manifest + '" | get kernel | print -n $in')
+programs := shell('open "' + manifest + '" | get programs | str join " " | print -n $in')
 
-# Assemble and link the kernel to target/kernel/jab.elf
-kernel:
-    mkdir -p {{kernel_dir}}
-    for f in kernel/*.S; do {{asm}} -I kernel/include -I sdk "$f" -o {{kernel_dir}}/$(basename "${f%.S}").o; done
-    {{link}} -T kernel/link.ld -nostdlib {{kernel_dir}}/*.o -o {{kernel_dir}}/jab.elf
-    {{objdump}} -d {{kernel_dir}}/jab.elf > {{kernel_dir}}/jab.disas
+default: build
 
-# Build prog/test/<name>/<name>.S to target/prog/test/<name>/<name>.jab
-prog name:
-    mkdir -p {{target}}/prog/test/{{name}}
-    {{asm}} -I sdk prog/test/{{name}}/{{name}}.S -o {{target}}/prog/test/{{name}}/{{name}}.o
-    {{link}} -T sdk/program.ld -nostdlib {{target}}/prog/test/{{name}}/{{name}}.o -o {{target}}/prog/test/{{name}}/{{name}}.elf
-    {{objcopy}} -O binary {{target}}/prog/test/{{name}}/{{name}}.elf {{target}}/prog/test/{{name}}/{{name}}.jab
+# Build the kernel, then every program
+build:
+    ^just -f "{{here}}/{{kernel_dir}}/justfile" build
+    for p in ("{{programs}}" | split row " ") { ^just -f ("{{here}}" | path join $p "justfile") build }
 
-# Create the block image the full run attaches
-disk:
-    mkdir -p {{target}}
-    test -f {{target}}/disk.img || truncate -s 64M {{target}}/disk.img
+# Build everything, then run every program's headless test against its
+# manifest's `expect`; prints each log and a summary, fails if any fails
+test seconds="10": build
+    let results = ("{{programs}}" | split row " " | each {|p| let r = (^just -f ("{{here}}" | path join $p "justfile") test {{seconds}} | complete); print $"--- ($p)"; print -n $r.stdout; { program: $p, passed: ($r.exit_code == 0) } }); print ($results | table); exit (if ($results | all {|r| $r.passed }) { 0 } else { 1 })
 
-# Run a test program with the console window and the UART on stdio
-run name: kernel (prog name) disk
-    {{qemu}} {{machine}} -m 4G {{devices}} \
-        -drive if=none,id=disk0,file={{target}}/disk.img,format=raw -device virtio-blk-device,drive=disk0 \
-        -bios none -kernel {{kernel_dir}}/jab.elf \
-        -device loader,file={{target}}/prog/test/{{name}}/{{name}}.jab,addr={{program_base}},force-raw=on \
-        -display default -serial stdio -monitor none
-
-# Run a test program headless for up to `seconds`, the UART captured to
-# target/prog/test/<name>/serial.log; exits with the program's status
-test name seconds="10": kernel (prog name)
-    timeout --signal=TERM {{seconds}} {{qemu}} {{machine}} -m 128M \
-        -bios none -kernel {{kernel_dir}}/jab.elf \
-        -device loader,file={{target}}/prog/test/{{name}}/{{name}}.jab,addr={{program_base}},force-raw=on \
-        -display none -monitor none -serial file:{{target}}/prog/test/{{name}}/serial.log; \
-    status=$?; cat {{target}}/prog/test/{{name}}/serial.log; exit $status
+# Run one program by its manifest name with the console window
+run name: build
+    let p = ("{{programs}}" | split row " " | where {|p| (open ("{{here}}" | path join $p "program.jab.toml") | get name) == "{{name}}" } | first); ^just -f ("{{here}}" | path join $p "justfile") run
 
 clean:
-    rm -rf {{target}}
+    rm -rf "{{here}}/.target"
