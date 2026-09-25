@@ -49,6 +49,11 @@ msg_banner:
     .asciz "jab: kernel up on qemu virt\n"
 .popsection
 .endif
+.ifdef DATA
+    # the data channel, up before the program starts; open already
+    # when DEBUG brought the device up
+    call serial_open
+.endif
     # sscratch holds the kernel stack top while the program runs.
     la t0, kernel_stack_top
     csrw sscratch, t0

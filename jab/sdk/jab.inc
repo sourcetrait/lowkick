@@ -31,6 +31,7 @@
 .set JAB_AWAIT_ALL, 0
 .set JAB_AWAIT_DISPLAY, 1
 .set JAB_AWAIT_KEYBOARD, 2
+.set JAB_AWAIT_DATA, 4
 
 # System call numbers (doc/syscalls.nuon)
 .set JAB_SYS_EXIT, 1
@@ -56,6 +57,8 @@
 .set JAB_SYS_GZ_READ, 21
 .set JAB_SYS_CHECKSUM, 22
 .set JAB_SYS_HASH, 23
+.set JAB_SYS_DATA_WRITE, 24
+.set JAB_SYS_DATA_READ, 25
 
 # gzip, which is DEFLATE with a jacket: ten bytes of header, optionally
 # an extra field, a name and a comment, then the compressed bytes, then
@@ -245,9 +248,9 @@
 
 # jab.await mask=JAB_AWAIT_ALL: halt until an event in the mask: the
 # display's next frame tick (JAB_AWAIT_DISPLAY), a key event waiting
-# (JAB_AWAIT_KEYBOARD), or either (JAB_AWAIT_ALL). The one call that
-# waits, and how a program idles between frames instead of spinning. a0
-# becomes the events that fired.
+# (JAB_AWAIT_KEYBOARD), bytes from the host waiting (JAB_AWAIT_DATA), or
+# any of them (JAB_AWAIT_ALL). How a program idles between frames
+# instead of spinning. a0 becomes the events that fired.
 .macro jab.await mask=JAB_AWAIT_ALL
     li a0, \mask
     li a7, JAB_SYS_AWAIT
@@ -262,6 +265,40 @@
 # jab.keyboard.await: jab.await for a key event.
 .macro jab.keyboard.await
     jab.await JAB_AWAIT_KEYBOARD
+.endm
+
+# jab.data.await: jab.await for bytes from the host.
+.macro jab.data.await
+    jab.await JAB_AWAIT_DATA
+.endm
+
+# The data channel: bytes both ways between the program and the host,
+# there when the program's manifest says `data = true`, which builds it
+# and its kernel with DATA and puts the port on the machine. A byte
+# stream, so any record shape is the program's own.
+
+# jab.data.write buffer, length: send that many bytes of the buffer to
+# the host. a0 becomes 0, or 1 when there is no data port (the build
+# had no DATA, or the machine no virtio-serial device). It returns once
+# the device has taken the bytes, so a host that stops reading holds
+# the program here once the pipe between them is full: with jab.await
+# the one call that can wait.
+.macro jab.data.write buffer, length
+    mv a1, \length
+    mv a0, \buffer
+    li a7, JAB_SYS_DATA_WRITE
+    ecall
+.endm
+
+# jab.data.read buffer, capacity: the bytes the host has sent, oldest
+# first, into the buffer, at most capacity of them. a0 becomes the
+# bytes written, 0 when none wait, and a1 how many still wait after
+# them. Never waits; to sleep until bytes arrive, jab.data.await.
+.macro jab.data.read buffer, capacity
+    li a1, \capacity
+    mv a0, \buffer
+    li a7, JAB_SYS_DATA_READ
+    ecall
 .endm
 
 # The disk and file calls take the program's buffer first, the way a

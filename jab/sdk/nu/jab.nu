@@ -18,9 +18,11 @@
 # programs alike. DEBUG picks the debug tree, .target/debug, and every
 # other build lands in .target/release, so the two coexist. `test`
 # always sets DEBUG, so a program's own debug reporting is there for its
-# test; `run` and `build` are release unless asked otherwise. A build is
-# skipped when its output is newer than every input and the flags,
-# symbols included, match the last build.
+# test; `run` and `build` are release unless asked otherwise. A program
+# whose manifest says `data = true` gets DATA on top, and the kernel it
+# runs on is built with the same symbols. A build is skipped when its
+# output is newer than every input and the flags, symbols included,
+# match the last build.
 
 # The riscv64 binutils prefixes: the official toolchain's triple first,
 # then the names distributions package the tools under.
@@ -60,11 +62,14 @@ const devices = [
 # gave, 1 on a program fault, 124 when the bound ended the run. With
 # `capture`, the screen is taken into screen.ppm that long after the
 # start and the run is then ended (status 0); with `keys`, each key is
-# pressed through the monitor that long after the start. `set` names the
-# symbols the kernel was built with: DEBUG puts the kernel's debug
-# channel on the machine, whose text comes back as `debug`. QEMU's own
-# complaints about the guest go to qemu.log; cpu_seconds is the QEMU
-# process's CPU time over the run and wall_seconds the run's length.
+# pressed through the monitor that long after the start; with `data`,
+# each entry's bytes are written into the data port that long after the
+# start. `set` names the symbols the kernel was built with: DEBUG puts
+# the kernel's debug channel on the machine, whose text comes back as
+# `debug`, and DATA the program's data channel, whose every byte to the
+# host, landed in data.out, comes back as `data`. QEMU's own complaints about the guest go to
+# qemu.log; cpu_seconds is the QEMU process's CPU time over the run and
+# wall_seconds the run's length.
 export def launch [
     --kernel: path             # the kernel ELF
     --image: path              # the program's .jab
@@ -72,10 +77,11 @@ export def launch [
     --seconds: int = 10        # the bound
     --capture: duration = 0sec # when to take the screen and end the run; 0 never
     --keys: table<at: duration, key: string, hold: int> = [] # keys to press that long after the start, QEMU's names, held for hold ms
+    --data: table<at: duration, bytes: binary> = [] # bytes to write into the data port that long after the start
     --disk: path = ""          # a raw image to put on the machine as the one virtio-blk disk
     --serial: string = "disk0" # the disk's serial, which the guest reads back as its own; 19 characters at most
     --set: string = ""         # the symbols the kernel was built with, comma separated
-]: nothing -> record<status: int, serial: string, debug: string, screen: string, qemu_log: string, cpu_seconds: float, wall_seconds: float> {
+]: nothing -> record<status: int, serial: string, debug: string, data: binary, screen: string, qemu_log: string, cpu_seconds: float, wall_seconds: float> {
     let out = ($out | path expand)
     mkdir $out
     let log = ($out | path join "serial.log")
@@ -83,11 +89,11 @@ export def launch [
     let screen = ($out | path join "screen.ppm")
     let pidfile = ($out | path join "qemu.pid")
     let monitor = ($out | path join "monitor")
-    let ports = (port-args (symbols $set) $out)
-    for f in ([$log $qemu_log $screen $pidfile ($monitor + ".in") ($monitor + ".out")] ++ (if $ports.debug_log == "" { [] } else { [$ports.debug_log] })) {
+    for f in [$log $qemu_log $screen $pidfile ($monitor + ".in") ($monitor + ".out")] {
         if ($f | path exists) { rm $f }
     }
     ^mkfifo ($monitor + ".in") ($monitor + ".out")
+    let ports = (ports (symbols $set) $out)
     let args = ([
         "--signal=TERM" $"($seconds)" "qemu-system-riscv64"
     ] ++ $machine ++ $name ++ ["-m" "128M"] ++ $display_device ++ $input_devices ++ $ports.args ++ [
@@ -97,12 +103,15 @@ export def launch [
         "-pidfile" $pidfile "-d" "guest_errors" "-D" $qemu_log
     ])
     let disked = ($args ++ (disk-args $disk $serial))
+    let data_out = (if $ports.data_pipe == "" { "" } else { $ports.data_pipe + ".out" })
+    let data_in = (if $ports.data_pipe == "" { "" } else { $ports.data_pipe + ".in" })
     let started = (date now)
     job spawn { ^timeout ...$disked | complete | job send 0 }
     mut result: any = null
     mut cpu = 0.0
     mut captured = ($capture == 0sec)
     mut sent = 0
+    mut sent_data = 0
     while $result == null {
         $result = (try { job recv --timeout 100ms } catch { null })
         let pid = (if ($pidfile | path exists) { open --raw $pidfile | str trim } else { "" })
@@ -113,6 +122,11 @@ export def launch [
             let k = ($keys | get $sent)
             if $result == null and $sample != null { monitor-send $monitor $"sendkey ($k.key) ($k.hold)" }
             $sent += 1
+        }
+        while $sent_data < ($data | length) and ($data | get $sent_data | get at) <= $elapsed {
+            let d = ($data | get $sent_data)
+            if $result == null and $sample != null and $data_in != "" { $d.bytes | save --raw --append $data_in }
+            $sent_data += 1
         }
         if (not $captured) and ($elapsed >= $capture) {
             $captured = true
@@ -127,6 +141,7 @@ export def launch [
         status: $result.exit_code,
         serial: (if ($log | path exists) { open --raw $log | decode } else { "" }),
         debug: (if $ports.debug_log != "" and ($ports.debug_log | path exists) { open --raw $ports.debug_log | decode } else { "" }),
+        data: (if $data_out != "" and ($data_out | path exists) { open --raw $data_out | into binary } else { 0x[] }),
         screen: (if ($screen | path exists) { $screen } else { "" }),
         qemu_log: $qemu_log,
         cpu_seconds: $cpu,
@@ -208,21 +223,36 @@ def disk-args [disk: path, serial: string]: nothing -> list<string> {
 
 # The channels a build symbol turns on, each a port of one
 # virtio-serial-device: DEBUG puts the kernel's debug channel on port 1
-# with the host's end a file, debug.log in `out`. Nothing at all for a
-# release build, so its machine carries no serial device. The console
-# keeps the UART in every build, since a fault line has to reach the
-# host when a port has not come up.
-def port-args [names: list<string>, out: path]: nothing -> record<args: list<string>, debug_log: string> {
-    if not ("DEBUG" in $names) { return { args: [], debug_log: "" } }
-    let log = ($out | path join "debug.log")
-    {
-        args: [
-            "-device" "virtio-serial-device"
-            "-chardev" $"file,id=jabdebug,path=($log)"
-            "-device" "virtserialport,chardev=jabdebug,nr=1,name=jab.debug"
-        ],
-        debug_log: $log,
-    }
+# with the host's end a file, debug.log in `out`, and DATA the program's
+# data channel on port 2 with the host's end QEMU's pipe chardev over
+# data.in, a named pipe the host writes into, and data.out, a plain
+# file the guest's bytes land in as they are sent, both made here. A
+# file rather than a second pipe, so nothing has to hold a pipe open
+# for the run and a program is never held by a host that stopped
+# reading. Nothing at all for a build with neither, so its machine
+# carries no serial device. The console keeps the UART in every build,
+# since a fault line has to reach the host when a port has not come up.
+def ports [names: list<string>, out: path]: nothing -> record<args: list<string>, debug_log: string, data_pipe: string> {
+    mkdir $out
+    let debug = (if "DEBUG" in $names {
+        let log = ($out | path join "debug.log")
+        if ($log | path exists) { rm $log }
+        { args: ["-chardev" $"file,id=jabdebug,path=($log)" "-device" "virtserialport,chardev=jabdebug,nr=1,name=jab.debug"], log: $log }
+    } else { { args: [], log: "" } })
+    let data = (if "DATA" in $names {
+        let pipe = ($out | path join "data")
+        let inward = ($pipe + ".in")
+        if (($inward | path type) != "pipe") {
+            if ($inward | path exists) { rm $inward }
+            ^mkfifo $inward
+        }
+        let outward = ($pipe + ".out")
+        if ($outward | path exists) { rm $outward }
+        "" | save -f $outward
+        { args: ["-chardev" $"pipe,id=jabdata,path=($pipe)" "-device" "virtserialport,chardev=jabdata,nr=2,name=jab.data"], pipe: $pipe }
+    } else { { args: [], pipe: "" } })
+    let device = (if ($debug.args | is-empty) and ($data.args | is-empty) { [] } else { ["-device" "virtio-serial-device"] })
+    { args: ($device ++ $debug.args ++ $data.args), debug_log: $debug.log, data_pipe: $data.pipe }
 }
 
 # The build symbols named by `--set`: comma separated, in any case,
@@ -242,6 +272,14 @@ def symbols [set: string]: nothing -> list<string> {
 
 # A test build's symbols: whatever was asked, and DEBUG.
 def with-debug [names: list<string>]: nothing -> list<string> { $names | append "DEBUG" | uniq | sort }
+
+# A program's own symbols: whatever was asked, and DATA when its
+# manifest says `data = true`, so the data port is there for a program
+# that declared it and absent for one that did not.
+def program-symbols [dir: path, names: list<string>]: nothing -> list<string> {
+    let manifest = (open (($dir | path expand) | path join "program.jab.toml"))
+    if ($manifest | get -o data | default false) { $names | append "DATA" | uniq | sort } else { $names }
+}
 
 # Which tree a build lands in: debug with DEBUG set, else release.
 def profile [names: list<string>]: nothing -> string { if "DEBUG" in $names { "debug" } else { "release" } }
@@ -487,22 +525,32 @@ def build-program [dir: path, names: list<string>]: nothing -> nothing {
 }
 
 # What a program's test or run needs, after building it with `names`
-# set: the kernel in the same tree, so a debug program runs on a debug
-# kernel.
+# set, and DATA when its manifest asks: the kernel built with the same
+# symbols in the same tree, so a debug program runs on a debug kernel
+# and a data program on a kernel carrying the port; standalone, with no
+# workspace, JAB_KERNEL is taken as it is.
 def prepared [dir: path, names: list<string>]: nothing -> record {
+    let names = (program-symbols $dir $names)
     build-program $dir $names
     let c = (context $dir "program" $names)
+    if $c.workspace != null {
+        let ws = (open ($c.workspace | path join "workspace.jab.toml"))
+        build-kernel ($c.workspace | path join $ws.kernel) $names
+    }
     let kernel = (kernel-elf $c)
     if not ($kernel | path exists) { error make {msg: $"no kernel at ($kernel); build the kernel first, with the same --set"} }
     { context: $c, kernel: $kernel, image: ($c.out | path join $"($c.manifest.name).jab") }
 }
 
 # Build the kernel and every program of the workspace at `ws` with
-# `names` set.
+# `names` set, each program with its own manifest's DATA on top.
 def workspace-build [ws: path, names: list<string>]: nothing -> nothing {
     let m = (open ($ws | path join "workspace.jab.toml"))
     build-kernel ($ws | path join $m.kernel) $names
-    for p in $m.programs { build-program ($ws | path join $p) $names }
+    for p in $m.programs {
+        let dir = ($ws | path join $p)
+        build-program $dir (program-symbols $dir $names)
+    }
 }
 
 # The arguments that run a program's test/test.nu on the kernel: the
@@ -518,7 +566,8 @@ def test-args [ready: record]: nothing -> list<string> {
 }
 
 # Run a program with the console window and the full virtio device set,
-# the UART on stdio, and the debug channel to a file when DEBUG is set;
+# the UART on stdio, the debug channel to a file when DEBUG is set, and
+# the data channel on a pair of pipes when the program asks for it;
 # QEMU's exit code is the program's exit status.
 def run-program [dir: path, names: list<string>]: nothing -> nothing {
     let ready = (prepared $dir $names)
@@ -536,11 +585,9 @@ def run-program [dir: path, names: list<string>]: nothing -> nothing {
     if ($window | str starts-with "vnc=") {
         print "no display server here, so this is a development run: the display is served over VNC on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
     }
-    let ports = (port-args $names $c.out)
-    if $ports.debug_log != "" {
-        if ($ports.debug_log | path exists) { rm $ports.debug_log }
-        print $"the kernel's debug channel goes to ($ports.debug_log)"
-    }
+    let ports = (ports $c.symbols $c.out)
+    if $ports.debug_log != "" { print $"the kernel's debug channel goes to ($ports.debug_log)" }
+    if $ports.data_pipe != "" { print $"the program's data channel: write into the pipe ($ports.data_pipe).in; what it sends lands in ($ports.data_pipe).out" }
     let args = ($machine ++ $name ++ ["-m" "4G"] ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ $ports.args ++ [
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"

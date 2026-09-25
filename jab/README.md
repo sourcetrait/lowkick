@@ -43,3 +43,11 @@ debug channel, a virtio-serial port, which `just run ... --set debug`
 writes to `debug.log` beside the program's build output and a test reads
 back as `debug` from `jab launch`. The console UART carries only what
 the program sends it, and the fault lines, in every build.
+
+A program that says `data = true` in its `program.jab.toml` gets a data
+channel, a second port, bytes both ways between it and the host through
+`jab.data.write`, `jab.data.read`, and `jab.data.await`: the program and
+its kernel are built with `DATA`, and the host's end is a pair of named
+pipes, `data.in` and `data.out` beside the build output, which `just
+run` names and a test drives through `jab launch --data`. `example/wasd`
+speaks a small binary API over it.

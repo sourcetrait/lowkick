@@ -6,6 +6,16 @@
 # does the other sphere. The other sphere starts somewhere and bounces
 # off the walls as in bounce, and off your sphere too. The two never
 # overlap. Positions and speeds carry FIX fractional bits.
+#
+# The data channel carries a small binary API, records both ways,
+# little-endian, each field at its own width. The host drives with key
+# events of CMD_SIZE bytes, the shape the keyboard delivers (a JAB_KEY_*
+# code, then pressed or released), which go through the same held-flag
+# path as the keys. wasd reports in records of REPORT_SIZE bytes: a
+# velocity record for a sphere when its velocity changes, an
+# acceleration record when the drive vector the held keys apply changes,
+# and a hit record per sphere per collision with the contact point, a
+# wall or the other sphere. Values are the program's own fixed point.
 .include "jab.inc"
 
 .set RADIUS, 90
@@ -33,6 +43,29 @@
 # the drawn discs, at whole pixels, never share one
 .set TOUCH_SQ, ((2 * RADIUS + 2) * (2 * RADIUS + 2))
 .set APART, ((2 * RADIUS + 3) * ONE)
+
+# The API's records. A command in: code u16, value u16. A report out:
+# kind u8, sphere u8, against u8 (a hit's other party), a pad byte,
+# then x i32 and y i32 in fixed point.
+.set CMD_SIZE, 4
+.set CMD_CODE, 0
+.set CMD_VALUE, 2
+.set CMD_READ_BYTES, 64
+.set REPORT_SIZE, 12
+.set REPORT_KIND, 0
+.set REPORT_SPHERE, 1
+.set REPORT_AGAINST, 2
+.set REPORT_X, 4
+.set REPORT_Y, 8
+.set REPORT_VELOCITY, 1
+.set REPORT_ACCELERATION, 2
+.set REPORT_HIT, 3
+.set SPHERE_PLAYER, 1
+.set SPHERE_BALL, 2
+.set AGAINST_WALL, 0
+# Reports a frame at most: two velocities, an acceleration, and a hit
+# on each axis and with the other sphere for each of the two
+.set REPORT_MAX, 9
 
 .section .text
 .global _start
@@ -86,11 +119,13 @@ frame:
     jab.await
     mv s0, a0
     call read_keys
+    call read_data
     andi t0, s0, JAB_AWAIT_DISPLAY
     beqz t0, frame
     call move_player
     call move_ball
     call collide
+    call report
     call render
     j frame
 
@@ -98,51 +133,101 @@ no_display:
     jab.uart.print msg_no_display
     jab.exit 1
 
-# read_keys: take every key event waiting. W, A, S, D set and clear
-# their held flags; the space bar, pressed, stops your sphere.
+# read_keys: take every key event waiting from the keyboard and apply
+# it.
 read_keys:
     addi sp, sp, -16
     sd ra, 8(sp)
 1:
     jab.keyboard.input
     beqz a0, 9f
+    call apply_key
+    j 1b
+9:
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# read_data: take every key event the host has sent through the data
+# channel and apply it. Bytes arrive as a stream, so a record may come
+# in two pieces; the piece in hand waits in cmd_partial for the rest.
+read_data:
+    addi sp, sp, -48
+    sd ra, 40(sp)
+1:
+    la t0, cmd_read
+    jab.data.read t0, CMD_READ_BYTES
+    beqz a0, 9f
+    la t0, cmd_read
+    sd t0, 0(sp)                # the next byte to take
+    sd a0, 8(sp)                # bytes left to take
+2:
+    ld t1, 8(sp)
+    beqz t1, 1b
+    ld t0, 0(sp)
+    lbu t2, 0(t0)
+    addi t0, t0, 1
+    sd t0, 0(sp)
+    addi t1, t1, -1
+    sd t1, 8(sp)
+    la t3, cmd_pending
+    ld t4, 0(t3)
+    la t5, cmd_partial
+    add t5, t5, t4
+    sb t2, 0(t5)
+    addi t4, t4, 1
+    sd t4, 0(t3)
+    li t5, CMD_SIZE
+    bne t4, t5, 2b
+    # a whole record
+    sd zero, 0(t3)
+    la t5, cmd_partial
+    lhu a0, CMD_CODE(t5)
+    lhu a1, CMD_VALUE(t5)
+    call apply_key
+    j 2b
+9:
+    ld ra, 40(sp)
+    addi sp, sp, 48
+    ret
+
+# apply_key: a0 is a key's code and a1 its value. W, A, S, D set and
+# clear their held flags; the space bar, pressed, stops your sphere.
+apply_key:
     li t0, JAB_KEY_SPACE
     bne a0, t0, 2f
     li t0, JAB_KEY_PRESSED
-    bne a1, t0, 1b
+    bne a1, t0, 9f
     la t0, player_vx
     sd zero, 0(t0)
     la t0, player_vy
     sd zero, 0(t0)
-    j 1b
+    ret
 2:
     snez t1, a1
     li t0, JAB_KEY_W
     bne a0, t0, 3f
     la t2, held_w
     sb t1, 0(t2)
-    j 1b
+    ret
 3:
     li t0, JAB_KEY_A
     bne a0, t0, 4f
     la t2, held_a
     sb t1, 0(t2)
-    j 1b
+    ret
 4:
     li t0, JAB_KEY_S
     bne a0, t0, 5f
     la t2, held_s
     sb t1, 0(t2)
-    j 1b
+    ret
 5:
     li t0, JAB_KEY_D
-    bne a0, t0, 1b
+    bne a0, t0, 9f
     la t2, held_d
     sb t1, 0(t2)
-    j 1b
 9:
-    ld ra, 8(sp)
-    addi sp, sp, 16
     ret
 
 # drive: a0 is a speed, a1 whether the key that adds to it is held, a2
@@ -181,19 +266,24 @@ drive:
 
 # wall: a0 is a position, a1 its speed, a2 the least centre, a3 the
 # greatest, in pixels; a0 and a1 become the position a frame later and
-# the speed, reversed when a wall was hit.
+# the speed, reversed when a wall was hit, and a2 becomes 1 when one
+# was, else 0.
 wall:
     add a0, a0, a1
     srai t0, a0, FIX
     bge t0, a2, 1f
     slli a0, a2, FIX
     neg a1, a1
+    li a2, 1
     ret
 1:
     ble t0, a3, 2f
     slli a0, a3, FIX
     neg a1, a1
+    li a2, 1
+    ret
 2:
+    li a2, 0
     ret
 
 # clamp: a0 is a position, a1 the least centre and a2 the greatest in
@@ -225,7 +315,8 @@ isqrt:
 3:
     ret
 
-# move_player: your sphere's speed from the keys, then its position.
+# move_player: your sphere's speed from the keys, then its position,
+# noting a wall hit on either axis.
 move_player:
     addi sp, sp, -16
     sd ra, 8(sp)
@@ -246,6 +337,8 @@ move_player:
     sd a0, 0(t0)
     la t0, player_vx
     sd a1, 0(t0)
+    la t0, player_hit_x
+    sb a2, 0(t0)
     la t0, player_vy
     ld a0, 0(t0)
     la t0, held_s
@@ -263,11 +356,13 @@ move_player:
     sd a0, 0(t0)
     la t0, player_vy
     sd a1, 0(t0)
+    la t0, player_hit_y
+    sb a2, 0(t0)
     ld ra, 8(sp)
     addi sp, sp, 16
     ret
 
-# move_ball: the other sphere on, and off the walls.
+# move_ball: the other sphere on, and off the walls, noting a hit.
 move_ball:
     addi sp, sp, -16
     sd ra, 8(sp)
@@ -282,6 +377,8 @@ move_ball:
     sd a0, 0(t0)
     la t0, ball_vx
     sd a1, 0(t0)
+    la t0, ball_hit_x
+    sb a2, 0(t0)
     la t0, ball_y
     ld a0, 0(t0)
     la t0, ball_vy
@@ -293,6 +390,8 @@ move_ball:
     sd a0, 0(t0)
     la t0, ball_vy
     sd a1, 0(t0)
+    la t0, ball_hit_y
+    sb a2, 0(t0)
     ld ra, 8(sp)
     addi sp, sp, 16
     ret
@@ -300,7 +399,8 @@ move_ball:
 # collide: when the spheres have met, each one closing on the other
 # has its speed reflected about the line between the centres, as off a
 # wall, and the two are set apart along that line so they never
-# overlap, kept on the screen.
+# overlap, kept on the screen. The meeting is noted with its point,
+# midway between the centres.
 collide:
     addi sp, sp, -64
     sd ra, 56(sp)
@@ -327,16 +427,18 @@ collide:
     li t0, TOUCH_SQ
     slli t0, t0, 2 * FIX
     bgt a5, t0, 9f
-.ifdef DEBUG
-    # a meeting, reported for the test to read: its outcome depends on
-    # where the other sphere started, so a run that had one is judged
-    # differently from one that did not
-    jab.uart.print msg_meeting
-.pushsection .rodata
-msg_meeting:
-    .asciz "wasd: meeting\n"
-.popsection
-.endif
+    # a meeting, and where: midway between the centres
+    add t0, s2, s4
+    srai t0, t0, 1
+    la t1, meet_x
+    sd t0, 0(t1)
+    add t0, s3, s5
+    srai t0, t0, 1
+    la t1, meet_y
+    sd t0, 0(t1)
+    li t0, 1
+    la t1, met
+    sb t0, 0(t1)
     beqz a5, 3f
     # the other sphere, if closing: its speed's part along the line,
     # taken away twice
@@ -437,6 +539,237 @@ msg_meeting:
     ld s6, 16(sp)
     ld s7, 8(sp)
     addi sp, sp, 64
+    ret
+
+# report: what changed this frame, as records into the report buffer,
+# sent to the host in one write: each sphere's velocity when it differs
+# from last frame's, the drive vector when it differs, and a hit record
+# per wall hit and per sphere of a meeting; then the notes are cleared.
+report:
+    addi sp, sp, -16
+    sd ra, 8(sp)
+    la t0, report_count
+    sd zero, 0(t0)
+    # your velocity
+    la t0, player_vx
+    ld a3, 0(t0)
+    la t0, player_vy
+    ld a4, 0(t0)
+    la t0, last_player_vx
+    ld t1, 0(t0)
+    la t0, last_player_vy
+    ld t2, 0(t0)
+    beq a3, t1, 1f
+    j 11f
+1:
+    beq a4, t2, 2f
+11:
+    la t0, last_player_vx
+    sd a3, 0(t0)
+    la t0, last_player_vy
+    sd a4, 0(t0)
+    li a0, REPORT_VELOCITY
+    li a1, SPHERE_PLAYER
+    li a2, AGAINST_WALL
+    call append_report
+2:
+    # the other's velocity
+    la t0, ball_vx
+    ld a3, 0(t0)
+    la t0, ball_vy
+    ld a4, 0(t0)
+    la t0, last_ball_vx
+    ld t1, 0(t0)
+    la t0, last_ball_vy
+    ld t2, 0(t0)
+    beq a3, t1, 3f
+    j 31f
+3:
+    beq a4, t2, 4f
+31:
+    la t0, last_ball_vx
+    sd a3, 0(t0)
+    la t0, last_ball_vy
+    sd a4, 0(t0)
+    li a0, REPORT_VELOCITY
+    li a1, SPHERE_BALL
+    li a2, AGAINST_WALL
+    call append_report
+4:
+    # the drive vector the held keys apply
+    la t0, held_d
+    lbu a3, 0(t0)
+    la t0, held_a
+    lbu t1, 0(t0)
+    sub a3, a3, t1
+    li t1, ACCEL
+    mul a3, a3, t1
+    la t0, held_s
+    lbu a4, 0(t0)
+    la t0, held_w
+    lbu t2, 0(t0)
+    sub a4, a4, t2
+    mul a4, a4, t1
+    la t0, last_ax
+    ld t1, 0(t0)
+    la t0, last_ay
+    ld t2, 0(t0)
+    beq a3, t1, 5f
+    j 51f
+5:
+    beq a4, t2, 6f
+51:
+    la t0, last_ax
+    sd a3, 0(t0)
+    la t0, last_ay
+    sd a4, 0(t0)
+    li a0, REPORT_ACCELERATION
+    li a1, SPHERE_PLAYER
+    li a2, AGAINST_WALL
+    call append_report
+6:
+    # wall hits: the contact point is the centre moved a radius toward
+    # the wall it is against
+    la t0, player_hit_x
+    lbu t0, 0(t0)
+    beqz t0, 7f
+    la t0, player_x
+    ld a3, 0(t0)
+    la t0, player_y
+    ld a4, 0(t0)
+    call toward_side
+    li a0, REPORT_HIT
+    li a1, SPHERE_PLAYER
+    li a2, AGAINST_WALL
+    call append_report
+7:
+    la t0, player_hit_y
+    lbu t0, 0(t0)
+    beqz t0, 8f
+    la t0, player_x
+    ld a3, 0(t0)
+    la t0, player_y
+    ld a4, 0(t0)
+    call toward_edge
+    li a0, REPORT_HIT
+    li a1, SPHERE_PLAYER
+    li a2, AGAINST_WALL
+    call append_report
+8:
+    la t0, ball_hit_x
+    lbu t0, 0(t0)
+    beqz t0, 9f
+    la t0, ball_x
+    ld a3, 0(t0)
+    la t0, ball_y
+    ld a4, 0(t0)
+    call toward_side
+    li a0, REPORT_HIT
+    li a1, SPHERE_BALL
+    li a2, AGAINST_WALL
+    call append_report
+9:
+    la t0, ball_hit_y
+    lbu t0, 0(t0)
+    beqz t0, 10f
+    la t0, ball_x
+    ld a3, 0(t0)
+    la t0, ball_y
+    ld a4, 0(t0)
+    call toward_edge
+    li a0, REPORT_HIT
+    li a1, SPHERE_BALL
+    li a2, AGAINST_WALL
+    call append_report
+10:
+    # a meeting: one record for each, with the same point
+    la t0, met
+    lbu t0, 0(t0)
+    beqz t0, 12f
+    la t0, meet_x
+    ld a3, 0(t0)
+    la t0, meet_y
+    ld a4, 0(t0)
+    li a0, REPORT_HIT
+    li a1, SPHERE_PLAYER
+    li a2, SPHERE_BALL
+    call append_report
+    la t0, meet_x
+    ld a3, 0(t0)
+    la t0, meet_y
+    ld a4, 0(t0)
+    li a0, REPORT_HIT
+    li a1, SPHERE_BALL
+    li a2, SPHERE_PLAYER
+    call append_report
+12:
+    la t0, player_hit_x
+    sb zero, 0(t0)
+    la t0, player_hit_y
+    sb zero, 0(t0)
+    la t0, ball_hit_x
+    sb zero, 0(t0)
+    la t0, ball_hit_y
+    sb zero, 0(t0)
+    la t0, met
+    sb zero, 0(t0)
+    la t0, report_count
+    ld t1, 0(t0)
+    beqz t1, 13f
+    li t2, REPORT_SIZE
+    mul t1, t1, t2
+    la t0, report_buffer
+    jab.data.write t0, t1
+13:
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# toward_side: a3, a4 are a centre against the left or right wall; a3
+# becomes the contact point's x, a radius toward that wall.
+toward_side:
+    li t0, LEFT * ONE
+    li t1, RADIUS * ONE
+    bne a3, t0, 1f
+    sub a3, a3, t1
+    ret
+1:
+    add a3, a3, t1
+    ret
+
+# toward_edge: a3, a4 are a centre against the top or bottom wall; a4
+# becomes the contact point's y, a radius toward that wall.
+toward_edge:
+    li t0, TOP * ONE
+    li t1, RADIUS * ONE
+    bne a4, t0, 1f
+    sub a4, a4, t1
+    ret
+1:
+    add a4, a4, t1
+    ret
+
+# append_report: a record of kind a0 about sphere a1, against a2, with
+# a3 and a4 as x and y, into the report buffer after those already
+# there; one more than REPORT_MAX is dropped.
+append_report:
+    la t0, report_count
+    ld t1, 0(t0)
+    li t2, REPORT_MAX
+    bgeu t1, t2, 1f
+    li t2, REPORT_SIZE
+    mul t2, t2, t1
+    la t3, report_buffer
+    add t3, t3, t2
+    sb a0, REPORT_KIND(t3)
+    sb a1, REPORT_SPHERE(t3)
+    sb a2, REPORT_AGAINST(t3)
+    sb zero, 3(t3)
+    sw a3, REPORT_X(t3)
+    sw a4, REPORT_Y(t3)
+    addi t1, t1, 1
+    sd t1, 0(t0)
+1:
     ret
 
 # render: erase both spheres where they were, draw them where they are,
@@ -640,6 +973,32 @@ old_ball_x:
     .skip 8
 old_ball_y:
     .skip 8
+last_player_vx:
+    .skip 8
+last_player_vy:
+    .skip 8
+last_ball_vx:
+    .skip 8
+last_ball_vy:
+    .skip 8
+last_ax:
+    .skip 8
+last_ay:
+    .skip 8
+meet_x:
+    .skip 8
+meet_y:
+    .skip 8
+report_count:
+    .skip 8
+cmd_pending:
+    .skip 8
+report_buffer:
+    .skip REPORT_MAX * REPORT_SIZE
+cmd_read:
+    .skip CMD_READ_BYTES
+cmd_partial:
+    .skip CMD_SIZE
 held_w:
     .skip 1
 held_a:
@@ -647,6 +1006,16 @@ held_a:
 held_s:
     .skip 1
 held_d:
+    .skip 1
+player_hit_x:
+    .skip 1
+player_hit_y:
+    .skip 1
+ball_hit_x:
+    .skip 1
+ball_hit_y:
+    .skip 1
+met:
     .skip 1
 
 .section .rodata
