@@ -1,3 +1,4 @@
 name = 'badstore'
 includes = ['../../sdk']
 link = '../../sdk/program.ld'
+display = 'none'

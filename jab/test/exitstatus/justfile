@@ -6,7 +6,7 @@
 # holding workspace.jab.toml, if any; the toolchain is RISCV_TOOLCHAIN,
 # else extern/riscv here, else the workspace's extern/riscv, else the
 # tools on PATH; the target is the workspace's .target, else .target
-# here; the name, include paths, and link script come from
+# here; the name, include paths, link script, and display come from
 # program.jab.toml. Paths must not contain spaces.
 
 set shell := ["nu", "-c"]
@@ -34,10 +34,12 @@ kernel_elf := target / "kernel" / "jab.elf"
 
 qemu := "qemu-system-riscv64"
 program_base := "0x80800000"
-# The console window: QEMU's native window when a display server is
-# present, else a VNC server on 127.0.0.1:5930 to tunnel and view;
-# JAB_DISPLAY overrides with any -display value.
-display := env("JAB_DISPLAY", if env("DISPLAY", "") != "" { "default" } else { if env("WAYLAND_DISPLAY", "") != "" { "default" } else { "vnc=127.0.0.1:30" } })
+# The console window, in order: JAB_DISPLAY if set (any -display value);
+# else the manifest's `display` (a program with no use for a window says
+# 'none'); else QEMU's native window when a display server is present,
+# else a VNC server on 127.0.0.1:5930 to tunnel and view.
+manifest_display := shell('open "' + manifest + '" | get -o display | default "" | print -n $in')
+display := if env("JAB_DISPLAY", "") != "" { env("JAB_DISPLAY") } else { if manifest_display != "" { manifest_display } else { if env("DISPLAY", "") != "" { "default" } else { if env("WAYLAND_DISPLAY", "") != "" { "default" } else { "vnc=127.0.0.1:30" } } } }
 machine := "-machine virt -cpu rv64 -accel tcg -smp 4 -global virtio-mmio.force-legacy=false"
 devices := "-device virtio-gpu-device,xres=1920,yres=1080 -device virtio-keyboard-device -device virtio-tablet-device -device virtio-net-device,netdev=net0 -netdev user,id=net0 -device virtio-sound-device,audiodev=snd0 -audiodev none,id=snd0 -device virtio-rng-device"
 
