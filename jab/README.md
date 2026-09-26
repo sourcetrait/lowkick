@@ -14,6 +14,11 @@ runs only under QEMU's `virt` machine.
 - `example/<name>/`, `test/<name>/` programs by category, each with
   `program.jab.toml`, a `justfile`, `src/main.S`, and its integration
   test at `test/test.nu`.
+- `shim/` the preload shims, a cargo workspace, a crate each under
+  `crates/`: `sdl` for the probe and `evdev` for the pad tests.
+- `../disco/` discovery, a cargo workspace beside this one: the
+  library `jabdisco` and its binary `jabdisco`, which finds the
+  gamepad a run attaches.
 - `.target/release/` and `.target/debug/` build output, ignored;
   `extern/` local links, ignored.
 
@@ -92,6 +97,23 @@ flip and their spacing, the flip cadence, the drawn frames and their
 interval, and any frame drawn inside a flip, which is a half-drawn
 tick. Linux only, since it preloads into QEMU; with no display server
 SDL runs its offscreen driver, drawing nothing along the same path.
+
+A gamepad on the host reaches a program as a device: on Linux a run
+finds it through `jabdisco`, built with cargo from `../disco` on first
+use, and passes it through as `virtio-input-host-device`, QEMU holding
+it for the run; `JAB_PAD=/dev/input/eventN` names one outright, and
+`--no-pad` leaves it off. A program reads it with `jab.pad.read`, the
+keys as a mask and every axis by its evdev code normalised to signed
+16 bits, `jab.pad.input` for the events as evdev sends them, and
+`jab.pad.axis` for an axis's own range; `example/pad` is wasd on the
+left stick, the dpad, and South. The keyboard and the tablet come off
+the line with `--no-kbm`. QEMU's `virt` has eight virtio transports and
+the full line uses them all with a pad and the serial device, so a
+pad run with `--set debug` or `--api` needs `--no-kbm`; the tool
+refuses a ninth and says so. A test plays a gamepad with no device on
+the host: `jab launch --pad <file>` takes a NUON table of timed
+events, makes a fifo, and preloads `shim/crates/evdev` into QEMU to
+answer the device's questions as an 8BitDo pad would, Linux only.
 
 The CPU is RVA23, `-cpu rva23s64`, which QEMU carries from 9.2; on an
 older QEMU the tool runs the generic `rv64`, which has what the kernel
