@@ -35,6 +35,9 @@ const triples = [
 # 8 MiB come first, and the program has the rest of the machine's 4 GiB.
 const program_base = "0x80a00000"
 const memory = ["-m" "4G"]
+# virt's map has this many virtio-mmio transports, a hard ceiling on
+# the devices a line can carry.
+const transport_limit = 8
 # RVA23 is the profile Jab pins, so everything it mandates is on whether
 # or not Jab itself uses it; the supervisor profile is the one carrying
 # an MMU mode and the supervisor timer the frame clock needs. RVA23 says
@@ -119,7 +122,11 @@ export def launch [
     --disk: path = ""          # a raw image to put on the machine as the one virtio-blk disk
     --serial: string = "disk0" # the disk's serial, which the guest reads back as its own; 19 characters at most
     --set: string = ""         # the symbols the kernel was built with, comma separated
+    --pad: path = ""           # a NUON file of pad events, [[at, type, code, value]; ...], played into a fifo attached as a gamepad through the evdev shim; Linux
+    --kbm                      # the keyboard and the tablet on the machine, which is the default
+    --no-kbm                   # neither on the machine
 ]: nothing -> record<status: int, serial: string, debug: string, api: binary, screen: string, qemu_log: string, cpu_seconds: float, wall_seconds: float> {
+    if $kbm and $no_kbm { error make {msg: "--kbm and --no-kbm together: one or the other"} }
     let out = ($out | path expand)
     mkdir $out
     let log = ($out | path join "serial.log")
@@ -132,9 +139,11 @@ export def launch [
     }
     ^mkfifo ($monitor + ".in") ($monitor + ".out")
     let ports = (ports (symbols $set) $out ($api or (not ($send | is-empty))))
+    let inputs = (if $no_kbm { [] } else { $input_devices })
+    let gamepad = (pad-setup $pad $out)
     let args = ([
         "--signal=TERM" $"($seconds)" "qemu-system-riscv64"
-    ] ++ (machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $input_devices ++ $ports.args ++ [
+    ] ++ (machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $inputs ++ $ports.args ++ $gamepad.args ++ [
         "-bios" "none" "-kernel" ($kernel | path expand)
         "-device" $"loader,file=($image | path expand),addr=($program_base),force-raw=on"
         "-display" "none" "-monitor" $"pipe:($monitor)" "-serial" $"file:($log)"
@@ -144,12 +153,13 @@ export def launch [
     let api_out = (if $ports.api_pipe == "" { "" } else { $ports.api_pipe + ".out" })
     let api_in = (if $ports.api_pipe == "" { "" } else { $ports.api_pipe + ".in" })
     let started = (date now)
-    job spawn { ^timeout ...$disked | complete | job send 0 }
+    job spawn { with-env $gamepad.env { ^timeout ...$disked | complete } | job send 0 }
     mut result: any = null
     mut cpu = 0.0
     mut captured = ($capture == 0sec)
     mut sent = 0
     mut sent_data = 0
+    mut sent_pad = 0
     while $result == null {
         $result = (try { job recv --timeout 100ms } catch { null })
         let pid = (if ($pidfile | path exists) { open --raw $pidfile | str trim } else { "" })
@@ -165,6 +175,11 @@ export def launch [
             let d = ($send | get $sent_data)
             if $result == null and $sample != null and $api_in != "" { $d.bytes | save --raw --append $api_in }
             $sent_data += 1
+        }
+        while $sent_pad < ($gamepad.groups | length) and ($gamepad.groups | get $sent_pad | get at) <= $elapsed {
+            let g = ($gamepad.groups | get $sent_pad)
+            if $result == null and $sample != null and $gamepad.fifo != "" { pad-report $g.items | save --raw --append $gamepad.fifo }
+            $sent_pad += 1
         }
         if (not $captured) and ($elapsed >= $capture) {
             $captured = true
@@ -291,6 +306,53 @@ def ports [names: list<string>, out: path, api: bool]: nothing -> record<args: l
     } else { { args: [], pipe: "" } })
     let device = (if ($debug.args | is-empty) and ($port.args | is-empty) { [] } else { ["-device" "virtio-serial-device"] })
     { args: ($device ++ $debug.args ++ $port.args), debug_log: $debug.log, api_pipe: $port.pipe }
+}
+
+# The gamepad a launch plays: nothing at all without a table; with one,
+# the fifo `pad` in `out`, made fresh, which QEMU's host-input device
+# opens as the pad with the evdev shim preloaded to answer its ioctls
+# as the reference pad; the QEMU arguments and environment for that;
+# and the table's rows grouped by their time, each group one report
+# the launch loop writes into the fifo at that time. The shim is one
+# of the workspace's, so the workspace above `out` must hold it. Linux
+# only, since it preloads.
+def pad-setup [table: path, out: path]: nothing -> record<args: list<string>, env: record, fifo: string, groups: list<any>> {
+    if ($table | is-empty) { return { args: [], env: {}, fifo: "", groups: [] } }
+    if $nu.os-info.name != "linux" { error make {msg: "--pad preloads the evdev shim into QEMU, which is Linux only"} }
+    let ws = (workspace-dir $out)
+    if $ws == null { error make {msg: "--pad needs the workspace above the output directory, which holds shim/crates/evdev"} }
+    let shim = (shim-build $ws "jabshim_evdev")
+    let rows = (open ($table | path expand))
+    let wanted = [at type code value]
+    if not ($wanted | all {|c| $c in ($rows | columns) }) {
+        error make {msg: $"($table): a pad table has the columns at, type, code, value; this one has ($rows | columns | str join ', ')"}
+    }
+    let fifo = ($out | path join "pad")
+    if (($fifo | path type) != null) { rm $fifo }
+    ^mkfifo $fifo
+    let groups = ($rows | sort-by at | group-by --to-table {|r| $r.at | into int } | each {|g| { at: ($g.items | first | get at), items: $g.items } })
+    {
+        args: ["-device" $"virtio-input-host-device,evdev=($fifo)"],
+        env: { LD_PRELOAD: $shim, EVDEV_SHIM_FIFO: $fifo },
+        fifo: $fifo,
+        groups: $groups,
+    }
+}
+
+# One report of pad events, as the device would send them: each row an
+# input_event, then a SYN_REPORT closing the report.
+def pad-report [items: table<type: int, code: int, value: int>]: nothing -> binary {
+    ($items | each {|e| input-event $e.type $e.code $e.value } | bytes collect) ++ (input-event 0 0 0)
+}
+
+# One input_event as an evdev device writes it, 24 bytes: the wall
+# clock's seconds and microseconds as two 64-bit fields, then the type
+# and the code as 16 bits each and the value as 32, all little-endian.
+def input-event [type: int, code: int, value: int]: nothing -> binary {
+    let ns = (date now | into int)
+    let sec = ($ns // 1_000_000_000)
+    let usec = (($ns mod 1_000_000_000) // 1000)
+    ($sec | into binary --endian little | bytes at 0..<8) ++ ($usec | into binary --endian little | bytes at 0..<8) ++ ($type | into binary --endian little | bytes at 0..<2) ++ ($code | into binary --endian little | bytes at 0..<2) ++ ($value | into binary --endian little | bytes at 0..<4)
 }
 
 # The build symbols named by `--set`: comma separated, in any case,
@@ -734,7 +796,7 @@ def test-args [ready: record]: nothing -> list<string> {
 # run would open), the UART where `serial` says (`stdio` or `none`), and
 # no monitor. The ports' files sit beside the build output, named in the
 # README.
-def run-line [dir: path, names: list<string>, api: bool, window: oneof<string, nothing>, serial: string]: nothing -> record<args: list<string>, window: string, context: record> {
+def run-line [dir: path, names: list<string>, api: bool, window: oneof<string, nothing>, serial: string, kbm: bool, pad: bool]: nothing -> record<args: list<string>, window: string, context: record> {
     let ready = (prepared $dir $names)
     let c = $ready.context
     let assets = (assets-image $c)
@@ -746,22 +808,74 @@ def run-line [dir: path, names: list<string>, api: bool, window: oneof<string, n
     let disk_serial = (if $assets == "" { "disk0" } else { disk-serial $c.manifest.name })
     let shown = (if $window == null { display $c.manifest } else { $window })
     let ports = (ports $c.symbols $c.out $api)
-    let args = ((machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $disk_serial) ++ $ports.args ++ [
+    let inputs = (if $kbm { $input_devices } else { [] })
+    let gamepad = (if $pad { gamepad-args $c.workspace } else { [] })
+    let args = ((machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $inputs ++ $gamepad ++ $devices ++ (disk-args $disk $disk_serial) ++ $ports.args ++ [
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"
         "-display" $shown "-serial" $serial "-monitor" "none"
     ])
+    let count = (transports $args)
+    if $count > $transport_limit {
+        error make {msg: $"the machine line carries ($count) virtio transports and virt has ($transport_limit): drop --api or --set debug, which share one, or run with --no-kbm, which frees two"}
+    }
     { args: $args, window: $shown, context: $c }
+}
+
+# The virtio transports a QEMU line uses: every `-device` of a
+# virtio-*-device, which is how a device rides virt's mmio transports;
+# a port on the serial device's own bus, and the loader, ride none.
+def transports [args: list<string>]: nothing -> int {
+    $args | window 2 | where {|w| $w.0 == "-device" and ($w.1 =~ '^virtio-.*-device') } | length
+}
+
+# The gamepad on the line, when there is one: JAB_PAD names its evdev
+# path outright; else on Linux, with a workspace to build it in,
+# jabdisco finds the expected pad and its path, and nothing goes on
+# the line when it finds none or the host has no path to give.
+def gamepad-args [ws: oneof<string, nothing>]: nothing -> list<string> {
+    let forced = ($env.JAB_PAD? | default "")
+    let path = (if $forced != "" { $forced } else if $nu.os-info.name != "linux" or $ws == null { "" } else {
+        let disco = (disco-build $ws)
+        let found = (^$disco | complete)
+        if $found.exit_code != 0 { error make {msg: $"jabdisco failed:\n($found.stderr)"} }
+        let pad = ($found.stdout | from nuon | get -o gamepad)
+        if $pad == null { "" } else { $pad | get -o path | default "" }
+    })
+    if $path == "" { [] } else { ["-device" $"virtio-input-host-device,evdev=($path)"] }
+}
+
+# The jabdisco binary, built with cargo from the disco workspace beside
+# the jab workspace into .target/disco on first use and whenever it
+# changes: its path.
+def disco-build [ws: path]: nothing -> string {
+    let manifest = ($ws | path dirname | path join "disco" "Cargo.toml")
+    if not ($manifest | path exists) { error make {msg: $"no disco workspace beside this one at ($manifest | path dirname); JAB_PAD names a pad's evdev path outright, and --no-pad leaves the pad off"} }
+    let target = ($ws | path join ".target" "disco")
+    let built = (^cargo build --release --quiet --manifest-path $manifest -p jabdisco_cli --target-dir $target | complete)
+    if $built.exit_code != 0 { error make {msg: $"building jabdisco failed:\n($built.stderr)"} }
+    $target | path join "release" "jabdisco"
 }
 
 # Run a program with the console window, the UART on stdio; QEMU's exit
 # code is the program's exit status. A run says nothing of its own.
-def run-program [dir: path, names: list<string>, api: bool]: nothing -> nothing {
-    let line = (run-line $dir $names $api null "stdio")
+def run-program [dir: path, names: list<string>, api: bool, kbm: bool, pad: bool]: nothing -> nothing {
+    let line = (run-line $dir $names $api null "stdio" $kbm $pad)
     if ($line.window | str starts-with "vnc=") {
         print "no display server here, so this is a development run: the display is served over VNC on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
     }
     ^qemu-system-riscv64 ...$line.args
+}
+
+# A shim, one package of the workspace's shim/ workspace, built with
+# cargo into .target/shim on first use and whenever it changes: the
+# path of its shared library, to preload into QEMU.
+def shim-build [ws: path, name: string]: nothing -> string {
+    let manifest = ($ws | path join "shim" "Cargo.toml")
+    let target = ($ws | path join ".target" "shim")
+    let built = (^cargo build --release --quiet --manifest-path $manifest -p $name --target-dir $target | complete)
+    if $built.exit_code != 0 { error make {msg: $"building the shim package ($name) failed:\n($built.stderr)"} }
+    $target | path join "release" $"lib($name).so"
 }
 
 # Probe a program under a window. `sdl`: run it under SDL with OpenGL
@@ -782,13 +896,9 @@ def probe [dir: path, kind: string, names: list<string>, seconds: int]: nothing 
 def probe-sdl [dir: path, names: list<string>, seconds: int]: nothing -> nothing {
     if $nu.os-info.name != "linux" { error make {msg: "the sdl probe preloads a library into QEMU, which is Linux only"} }
     let ws = (workspace-dir $dir)
-    if $ws == null { error make {msg: "the sdl probe needs the workspace above the program, which holds probe/sdl_shim"} }
-    let manifest = ($ws | path join "probe" "sdl_shim" "Cargo.toml")
-    let target = ($ws | path join ".target" "probe" "sdl_shim")
-    let built = (^cargo build --release --quiet --manifest-path $manifest --target-dir $target | complete)
-    if $built.exit_code != 0 { error make {msg: $"building probe/sdl_shim failed:\n($built.stderr)"} }
-    let shim = ($target | path join "release" "libsdl_shim.so")
-    let line = (run-line $dir $names false "sdl,gl=on" "none")
+    if $ws == null { error make {msg: "the sdl probe needs the workspace above the program, which holds shim/crates/sdl"} }
+    let shim = (shim-build $ws "jabshim_sdl")
+    let line = (run-line $dir $names false "sdl,gl=on" "none" true false)
     let out = ($line.context.out | path join "probe")
     mkdir $out
     let log = ($out | path join "sdl.log")
@@ -921,11 +1031,26 @@ def "main workspace test" [ws: path, category: string = "", name: string = "", -
 
 # Build everything, then run one program with the console window;
 # release unless --set says otherwise, the API's port on the machine
-# with --api.
-def "main workspace run" [ws: path, category: string, name: string, --set: string = "", --api] {
+# with --api; the keyboard and the tablet on by default and off with
+# --no-kbm; the gamepad found on the host attached by default and left
+# off with --no-pad.
+def "main workspace run" [ws: path, category: string, name: string, --set: string = "", --api, --kbm, --no-kbm, --pad, --no-pad] {
     let names = (symbols $set)
     workspace-build $ws $names
-    run-program ($ws | path join $category $name) $names $api
+    run-program ($ws | path join $category $name) $names $api (kbm-choice $kbm $no_kbm) (pad-choice $pad $no_pad)
+}
+
+# The keyboard and the tablet on the line: on unless --no-kbm, and
+# never both flags of the pair.
+def kbm-choice [kbm: bool, no_kbm: bool]: nothing -> bool {
+    if $kbm and $no_kbm { error make {msg: "--kbm and --no-kbm together: one or the other"} }
+    not $no_kbm
+}
+
+# The gamepad on the line: on unless --no-pad, and never both flags.
+def pad-choice [pad: bool, no_pad: bool]: nothing -> bool {
+    if $pad and $no_pad { error make {msg: "--pad and --no-pad together: one or the other"} }
+    not $no_pad
 }
 
 # Build everything, then probe one program under a window for
@@ -952,9 +1077,11 @@ def "main test" [dir: path, --set: string = ""] {
 }
 
 # Build the program at `dir` and run it with the console window; release
-# unless --set says otherwise, the API's port on the machine with --api.
-def "main run" [dir: path, --set: string = "", --api] {
-    run-program $dir (symbols $set) $api
+# unless --set says otherwise, the API's port on the machine with --api,
+# the keyboard and the tablet off with --no-kbm, the gamepad off with
+# --no-pad.
+def "main run" [dir: path, --set: string = "", --api, --kbm, --no-kbm, --pad, --no-pad] {
+    run-program $dir (symbols $set) $api (kbm-choice $kbm $no_kbm) (pad-choice $pad $no_pad)
 }
 
 # Build the program at `dir` and probe it under a window for --seconds;
@@ -973,5 +1100,5 @@ def "main clean" [dir: path, --kernel] {
 }
 
 def main [] {
-    print "nu jab.nu <build|test|clean> <dir> [--kernel] [--set names]; nu jab.nu run <dir> [--set names] [--api]; nu jab.nu probe <dir> sdl [--seconds N] [--set names]; nu jab.nu workspace <build|test|run> <ws> [category [name]] [--set names] [--api]; nu jab.nu workspace probe <ws> sdl <category> <name> [--seconds N]; nu jab.nu watch <ws>; nu jab.nu watched <ws> [--skip N]"
+    print "nu jab.nu <build|test|clean> <dir> [--kernel] [--set names]; nu jab.nu run <dir> [--set names] [--api] [--no-kbm] [--no-pad]; nu jab.nu probe <dir> sdl [--seconds N] [--set names]; nu jab.nu workspace <build|test|run> <ws> [category [name]] [--set names] [--api] [--no-kbm] [--no-pad]; nu jab.nu workspace probe <ws> sdl <category> <name> [--seconds N]; nu jab.nu watch <ws>; nu jab.nu watched <ws> [--skip N]"
 }

@@ -84,8 +84,8 @@ a row that changed identity during the recording is reported with
 
 `just probe sdl example walk` looks at the window itself: it runs the
 program under SDL with OpenGL for twelve seconds (`--seconds N`) with a
-small library preloaded into QEMU, `probe/sdl_shim`, built with cargo
-into `.target`, which logs every SDL call the window makes with a
+small library preloaded into QEMU, `shim/crates/sdl`, built with cargo
+into `.target/shim`, which logs every SDL call the window makes with a
 timestamp and its callers; then it prints one NUON record on how the
 program's flips reached the window, ready to paste: the uploads per
 flip and their spacing, the flip cadence, the drawn frames and their

@@ -1,0 +1,26 @@
+# Discovery for LowKick's tools and launchers: what the expected
+# devices are, answered blind. The library, jabdisco, is what a
+# launcher links; the cli, jabdisco_cli, is the binary `jabdisco` the
+# SDK's tool runs. A crate declares only its name and description;
+# everything else is the workspace's.
+[workspace]
+resolver = "3"
+members = [
+    "crates/lib",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.0.0-1"
+edition = "2024"
+authors = ["SourceTrait <development@sourcetrait.com>"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/sourcetrait/lowkick"
+homepage = "https://sourcetrait.com"
+publish = false
+
+[workspace.dependencies]
+jabdisco = { path = "crates/lib" }
+gilrs = "0.11"
+nuon = "0.115"
+nu-protocol = "0.115"

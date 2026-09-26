@@ -23,7 +23,7 @@ struct DlInfo {
     dli_saddr: *mut c_void,
 }
 
-extern "C" {
+unsafe extern "C" {
     fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int;
@@ -55,12 +55,12 @@ fn log(what: &str) {
 
 /// The real SDL function of that name, from libSDL2.
 unsafe fn real(symbol: &[u8]) -> *mut c_void {
-    let lib = dlopen(b"libSDL2-2.0.so.0\0".as_ptr() as *const c_char, RTLD_LAZY);
+    let lib = unsafe { dlopen(b"libSDL2-2.0.so.0\0".as_ptr() as *const c_char, RTLD_LAZY) };
     if lib.is_null() {
         log("libSDL2 not found");
         std::process::abort();
     }
-    let function = dlsym(lib, symbol.as_ptr() as *const c_char);
+    let function = unsafe { dlsym(lib, symbol.as_ptr() as *const c_char) };
     if function.is_null() {
         log("symbol not found");
         std::process::abort();
@@ -74,7 +74,7 @@ unsafe fn real(symbol: &[u8]) -> *mut c_void {
 /// it, when the loader knows one.
 unsafe fn callers() -> String {
     let mut frames: [*mut c_void; 8] = [std::ptr::null_mut(); 8];
-    let count = backtrace(frames.as_mut_ptr(), 8) as usize;
+    let count = unsafe { backtrace(frames.as_mut_ptr(), 8) } as usize;
     let mut out = String::new();
     for frame in frames.iter().take(count).skip(2).take(4) {
         let mut info = DlInfo {
@@ -83,14 +83,14 @@ unsafe fn callers() -> String {
             dli_sname: std::ptr::null(),
             dli_saddr: std::ptr::null_mut(),
         };
-        if dladdr(*frame, &mut info) != 0 && !info.dli_fname.is_null() {
-            let name = CStr::from_ptr(info.dli_fname).to_string_lossy();
+        if unsafe { dladdr(*frame, &mut info) } != 0 && !info.dli_fname.is_null() {
+            let name = unsafe { CStr::from_ptr(info.dli_fname) }.to_string_lossy();
             let base = name.rsplit('/').next().unwrap_or("").to_string();
             let offset = (*frame as usize).wrapping_sub(info.dli_fbase as usize);
             if info.dli_sname.is_null() {
                 out.push_str(&format!(" {}+{:x}", base, offset));
             } else {
-                let symbol = CStr::from_ptr(info.dli_sname).to_string_lossy();
+                let symbol = unsafe { CStr::from_ptr(info.dli_sname) }.to_string_lossy();
                 let delta = (*frame as usize).wrapping_sub(info.dli_saddr as usize);
                 out.push_str(&format!(" {}+{:x}({}+{:x})", base, offset, symbol, delta));
             }
@@ -106,31 +106,31 @@ type Swap = unsafe extern "C" fn(*mut c_void);
 type WindowSize = unsafe extern "C" fn(*mut c_void, *mut c_int, *mut c_int);
 type Poll = unsafe extern "C" fn(*mut c_void) -> c_int;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SDL_GL_MakeCurrent(window: *mut c_void, context: *mut c_void) -> c_int {
-    let from = callers();
+    let from = unsafe { callers() };
     log(&format!("make_current{}", from));
-    let function: MakeCurrent = std::mem::transmute(real(b"SDL_GL_MakeCurrent\0"));
-    function(window, context)
+    let function: MakeCurrent = unsafe { std::mem::transmute(real(b"SDL_GL_MakeCurrent\0")) };
+    unsafe { function(window, context) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SDL_GL_SwapWindow(window: *mut c_void) {
     log("swap");
-    let function: Swap = std::mem::transmute(real(b"SDL_GL_SwapWindow\0"));
-    function(window)
+    let function: Swap = unsafe { std::mem::transmute(real(b"SDL_GL_SwapWindow\0")) };
+    unsafe { function(window) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SDL_GetWindowSize(window: *mut c_void, width: *mut c_int, height: *mut c_int) {
     log("size");
-    let function: WindowSize = std::mem::transmute(real(b"SDL_GetWindowSize\0"));
-    function(window, width, height)
+    let function: WindowSize = unsafe { std::mem::transmute(real(b"SDL_GetWindowSize\0")) };
+    unsafe { function(window, width, height) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn SDL_PollEvent(event: *mut c_void) -> c_int {
     log("poll");
-    let function: Poll = std::mem::transmute(real(b"SDL_PollEvent\0"));
-    function(event)
+    let function: Poll = unsafe { std::mem::transmute(real(b"SDL_PollEvent\0")) };
+    unsafe { function(event) }
 }

@@ -1,0 +1,15 @@
+[package]
+name = "jabshim_evdev"
+description = "A preload library that answers QEMU's evdev ioctls for a fifo, so a test attaches a gamepad to virtio-input-host-device with no device on the host."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]

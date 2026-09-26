@@ -1,0 +1,21 @@
+# The shims: libraries preloaded into QEMU with LD_PRELOAD by the SDK's
+# tool, one crate each under crates/, built into the workspace's
+# .target/shim. A crate declares only its name and description;
+# everything else is the workspace's.
+[workspace]
+resolver = "3"
+members = [
+    "crates/sdl",
+    "crates/evdev",
+]
+
+[workspace.package]
+version = "0.0.0-1"
+edition = "2024"
+authors = ["SourceTrait <development@sourcetrait.com>"]
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/sourcetrait/lowkick"
+homepage = "https://sourcetrait.com"
+publish = false
+
+[workspace.dependencies]

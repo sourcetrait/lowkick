@@ -1,0 +1,17 @@
+[package]
+name = "jabdisco_cli"
+description = "The jabdisco binary: prints what jabdisco discovers and nothing else."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "jabdisco"
+path = "src/main.rs"
+
+[dependencies]
+jabdisco.workspace = true
