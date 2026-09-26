@@ -36,6 +36,12 @@ test category="" name="" *args:
 run category name *args:
     ^nu "{{jab}}" workspace run "{{here}}" "{{category}}" "{{name}}" {{args}}
 
+# Build, then probe one program under a window and print one NUON
+# record on how its flips reached it: `just probe sdl example walk`,
+# twelve seconds or `--seconds N`; Linux, with cargo for the shim
+probe kind category name *args:
+    ^nu "{{jab}}" workspace probe "{{here}}" "{{kind}}" "{{category}}" "{{name}}" {{args}}
+
 # Record the running Jab QEMU per thread, once a second, to
 # .target/watch.nuonl: `just watch` from any shell while a program
 # runs, until the run ends

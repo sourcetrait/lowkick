@@ -80,6 +80,17 @@ recording, the run as it was (host, QEMU, window, the symbols the
 kernel was built with) and per thread the steady CPU seconds a second
 after the first five, which `--skip` changes, ready to paste.
 
+`just probe sdl example walk` looks at the window itself: it runs the
+program under SDL with OpenGL for twelve seconds (`--seconds N`) with a
+small library preloaded into QEMU, `probe/sdl_shim`, built with cargo
+into `.target`, which logs every SDL call the window makes with a
+timestamp and its callers; then it prints one NUON record on how the
+program's flips reached the window, ready to paste: the uploads per
+flip and their spacing, the flip cadence, the drawn frames and their
+interval, and any frame drawn inside a flip, which is a half-drawn
+tick. Linux only, since it preloads into QEMU; with no display server
+SDL runs its offscreen driver, drawing nothing along the same path.
+
 The CPU is RVA23, `-cpu rva23s64`, which QEMU carries from 9.2; on an
 older QEMU the tool runs the generic `rv64`, which has what the kernel
 needs, and `JAB_CPU` overrides either with any `-cpu` value.

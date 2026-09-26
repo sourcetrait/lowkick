@@ -728,35 +728,168 @@ def test-args [ready: record]: nothing -> list<string> {
     if $assets == "" { $common } else { $common ++ ["--assets" $assets] }
 }
 
-# Run a program with the console window and the full virtio device set,
-# the UART on stdio, the debug channel to a file when DEBUG is set, and
-# the API's port when `api` asked for it; QEMU's exit code is the
-# program's exit status.
-def run-program [dir: path, names: list<string>, api: bool]: nothing -> nothing {
+# The QEMU line that runs a program, built first: the full virtio device
+# set, the program's own disk when it has one else the blank image that
+# has always been there, the debug channel to a file when DEBUG is set,
+# the API's port when `api` asks, the window given (null for the one a
+# run would open), the UART where `serial` says (`stdio` or `none`), and
+# no monitor. The ports' files sit beside the build output, named in the
+# README.
+def run-line [dir: path, names: list<string>, api: bool, window: oneof<string, nothing>, serial: string]: nothing -> record<args: list<string>, window: string, context: record> {
     let ready = (prepared $dir $names)
     let c = $ready.context
-    # a program's own assets when it has them, else the blank image that
-    # has always been there, so the machine always carries one disk
     let assets = (assets-image $c)
     let disk = (if $assets == "" {
         let blank = ($c.target | path join "disk.img")
         if not ($blank | path exists) { ^truncate -s 64M $blank }
         $blank
     } else { $assets })
-    let serial = (if $assets == "" { "disk0" } else { disk-serial $c.manifest.name })
-    let window = (display $c.manifest)
-    if ($window | str starts-with "vnc=") {
-        print "no display server here, so this is a development run: the display is served over VNC on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
-    }
-    # the ports' files sit beside the build output, named in the README;
-    # a run says nothing of its own
+    let disk_serial = (if $assets == "" { "disk0" } else { disk-serial $c.manifest.name })
+    let shown = (if $window == null { display $c.manifest } else { $window })
     let ports = (ports $c.symbols $c.out $api)
-    let args = ((machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $serial) ++ $ports.args ++ [
+    let args = ((machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $input_devices ++ $devices ++ (disk-args $disk $disk_serial) ++ $ports.args ++ [
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"
-        "-display" $window "-serial" "stdio" "-monitor" "none"
+        "-display" $shown "-serial" $serial "-monitor" "none"
     ])
-    ^qemu-system-riscv64 ...$args
+    { args: $args, window: $shown, context: $c }
+}
+
+# Run a program with the console window, the UART on stdio; QEMU's exit
+# code is the program's exit status. A run says nothing of its own.
+def run-program [dir: path, names: list<string>, api: bool]: nothing -> nothing {
+    let line = (run-line $dir $names $api null "stdio")
+    if ($line.window | str starts-with "vnc=") {
+        print "no display server here, so this is a development run: the display is served over VNC on 127.0.0.1:5930; tunnel it with `ssh -N -L 5930:127.0.0.1:5930 <this host>` and view it with `vncviewer 127.0.0.1:5930`"
+    }
+    ^qemu-system-riscv64 ...$line.args
+}
+
+# Probe a program under a window. `sdl`: run it under SDL with OpenGL
+# for `seconds` with the shim of probe/sdl_shim preloaded into QEMU,
+# then report how its flips reached the window.
+def probe [dir: path, kind: string, names: list<string>, seconds: int]: nothing -> nothing {
+    match $kind {
+        "sdl" => { probe-sdl $dir $names $seconds },
+        _ => { error make {msg: $"no probe called ($kind); there is `sdl`"} },
+    }
+}
+
+# The SDL probe: the shim built with cargo into the workspace's .target,
+# the program run under `sdl,gl=on` with the UART off for `seconds`, the
+# shim's log read back, and one NUON record printed. Linux only, since
+# it preloads a library into QEMU. With no display server SDL runs its
+# offscreen driver, which draws nothing but keeps every path the same.
+def probe-sdl [dir: path, names: list<string>, seconds: int]: nothing -> nothing {
+    if $nu.os-info.name != "linux" { error make {msg: "the sdl probe preloads a library into QEMU, which is Linux only"} }
+    let ws = (workspace-dir $dir)
+    if $ws == null { error make {msg: "the sdl probe needs the workspace above the program, which holds probe/sdl_shim"} }
+    let manifest = ($ws | path join "probe" "sdl_shim" "Cargo.toml")
+    let target = ($ws | path join ".target" "probe" "sdl_shim")
+    let built = (^cargo build --release --quiet --manifest-path $manifest --target-dir $target | complete)
+    if $built.exit_code != 0 { error make {msg: $"building probe/sdl_shim failed:\n($built.stderr)"} }
+    let shim = ($target | path join "release" "libsdl_shim.so")
+    let line = (run-line $dir $names false "sdl,gl=on" "none")
+    let out = ($line.context.out | path join "probe")
+    mkdir $out
+    let log = ($out | path join "sdl.log")
+    if ($log | path exists) { rm $log }
+    let server = (($env.DISPLAY? | default "") != "") or (($env.WAYLAND_DISPLAY? | default "") != "")
+    let driver = (if $server { "" } else { "offscreen" })
+    let preload = { LD_PRELOAD: $shim, SDL_SHIM_LOG: $log }
+    let extra = (if $driver == "" { $preload } else { $preload | insert SDL_VIDEODRIVER $driver })
+    let run = (with-env $extra { ^timeout --signal=TERM ($seconds | into string) qemu-system-riscv64 ...$line.args | complete })
+    if not ($log | path exists) { error make {msg: $"QEMU wrote no shim log; its stderr:\n($run.stderr)"} }
+    let qemu = (^qemu-system-riscv64 --version | complete | get stdout | lines | get -o 0 | default "")
+    let report = (sdl-report $log)
+    let record = ({
+        run: {
+            program: $line.context.manifest.name,
+            os: $nu.os-info.name,
+            qemu: $qemu,
+            window: "sdl,gl=on",
+            driver: (if $driver == "" { "the host's" } else { $driver }),
+            symbols: $line.context.symbols,
+            seconds: $seconds,
+            qemu_said: ($run.stderr | lines | where {|l| not ($l | str contains "terminating on signal") } | first 3),
+        },
+    } | merge $report)
+    print ($record | to nuon --indent 2)
+}
+
+# The report on a shim log: how the flips reached the window. A
+# make_current followed by a window-size call within 2 ms opens a drawn
+# frame. Any other is an upload: one per rectangle flushed when it comes
+# through the virtio-gpu device, which its callers name, and otherwise
+# one of the console's own, which a timer makes now and then and which
+# is no flip of the program's. Flush uploads within 5 ms of the previous
+# belong to one flip. A drawn frame with a flush upload under 3 ms on
+# each side sits inside a flip, which is the half-drawn tick to look
+# for.
+def sdl-report [log: path]: nothing -> record {
+    let events = (open --raw $log | decode | lines | each {|l| $l | parse --regex '^(?P<ts>\d+\.\d+) (?P<name>\S+)(?P<rest>.*)$' | get -o 0 } | compact | each {|e| { ts: ($e.ts | into float), name: $e.name, callers: ($e.rest | str trim) } })
+    if ($events | is-empty) { error make {msg: "the shim log is empty; the window made no SDL calls"} }
+    let t0 = ($events | first | get ts)
+    let kinds = ($events | enumerate | each {|e|
+        if $e.item.name != "make_current" { { ts: $e.item.ts, kind: $e.item.name, callers: "" } } else {
+            let next = ($events | get -o ($e.index + 1))
+            if $next != null and $next.name == "size" and (($next.ts - $e.item.ts) < 0.002) { { ts: $e.item.ts, kind: "render", callers: $e.item.callers } } else if ($e.item.callers | str contains "virtio-gpu") or ($e.item.callers | str contains "virtio_gpu") { { ts: $e.item.ts, kind: "upload", callers: $e.item.callers } } else { { ts: $e.item.ts, kind: "other_upload", callers: $e.item.callers } }
+        }
+    })
+    let uploads = ($kinds | where kind == "upload")
+    let others = ($kinds | where kind == "other_upload")
+    let renders = ($kinds | where kind == "render" | get ts)
+    let polls = ($kinds | where kind == "poll" | get ts)
+    mut flips: list<record<start: float, end: float, size: int, gaps: list<float>>> = []
+    for u in $uploads {
+        if (($flips | length) > 0) and (($u.ts - ($flips | last | get end)) < 0.005) {
+            let f = ($flips | last)
+            $flips = (($flips | drop 1) ++ [{ start: $f.start, end: $u.ts, size: ($f.size + 1), gaps: ($f.gaps ++ [(($u.ts - $f.end) * 1000.0)]) }])
+        } else {
+            $flips = ($flips ++ [{ start: $u.ts, end: $u.ts, size: 1, gaps: [] }])
+        }
+    }
+    let done = $flips
+    mut last_upload = -1.0
+    mut befores: list<float> = []
+    for e in $kinds {
+        if $e.kind == "upload" { $last_upload = $e.ts } else if $e.kind == "render" { $befores = ($befores ++ [(if $last_upload < 0.0 { 1.0 } else { $e.ts - $last_upload })]) }
+    }
+    mut next_upload = -1.0
+    mut afters: list<float> = []
+    for e in ($kinds | reverse) {
+        if $e.kind == "upload" { $next_upload = $e.ts } else if $e.kind == "render" { $afters = ($afters ++ [(if $next_upload < 0.0 { 1.0 } else { $next_upload - $e.ts })]) }
+    }
+    let afters_in_order = ($afters | reverse)
+    let befores_in_order = $befores
+    let inside = ($renders | enumerate | each {|r|
+        let before = (($befores_in_order | get $r.index) * 1000.0)
+        let after = (($afters_in_order | get $r.index) * 1000.0)
+        if $before < 3.0 and $after < 3.0 { { at: (($r.item - $t0) | math round -p 3), upload_before_ms: ($before | math round -p 2), upload_after_ms: ($after | math round -p 2) } } else { null }
+    } | compact)
+    let spans = ($done | where size > 1 | each {|f| ($f.end - $f.start) * 1000.0 })
+    let gaps = ($done | get gaps | flatten)
+    let cadence = ($done | window 2 | each {|w| ($w.1.start - $w.0.start) * 1000.0 })
+    let intervals = ($renders | window 2 | each {|w| ($w.1 - $w.0) * 1000.0 })
+    let hist = {|values: list<float>| $values | each {|v| $v | math round -p 0 } | uniq --count | sort-by count --reverse | first 6 | each {|c| { ms: $c.value, count: $c.count } } }
+    let stat = {|values: list<float>| if ($values | is-empty) { { median: 0.0, max: 0.0 } } else { { median: ($values | math median | math round -p 2), max: ($values | math max | math round -p 2) } } }
+    {
+        seconds_logged: ((($events | last | get ts) - $t0) | math round -p 1),
+        flips: ($done | length),
+        uploads_per_flip: ($done | get size | uniq --count | sort-by count --reverse | first 6 | each {|c| { uploads: $c.value, count: $c.count } }),
+        flip_span_ms: (do $stat $spans),
+        upload_gap_ms: (do $stat $gaps),
+        flip_cadence_ms: (do $hist $cadence),
+        renders: ($renders | length),
+        render_interval_ms: (do $hist $intervals),
+        renders_inside_flip: ($inside | length),
+        inside_cases: ($inside | first 8),
+        polls: ($polls | length),
+        other_uploads: ($others | length),
+        upload_callers: ($uploads | get callers | uniq --count | sort-by count --reverse | first 2 | each {|c| { callers: $c.value, count: $c.count } }),
+        other_upload_callers: ($others | get callers | uniq --count | sort-by count --reverse | first 2 | each {|c| { callers: $c.value, count: $c.count } }),
+        render_callers: ($kinds | where kind == "render" | get callers | uniq --count | sort-by count --reverse | first 2 | each {|c| { callers: $c.value, count: $c.count } }),
+    }
 }
 
 # Build the kernel and every program of the workspace at `ws`; release
@@ -796,6 +929,16 @@ def "main workspace run" [ws: path, category: string, name: string, --set: strin
     run-program ($ws | path join $category $name) $names $api
 }
 
+# Build everything, then probe one program under a window for
+# --seconds: `just probe sdl example walk`; release unless --set says
+# otherwise. Prints one NUON record on how the program's flips reached
+# the window.
+def "main workspace probe" [ws: path, kind: string, category: string, name: string, --seconds: int = 12, --set: string = ""] {
+    let names = (with-host (symbols $set))
+    workspace-build $ws $names
+    probe ($ws | path join $category $name) $kind $names $seconds
+}
+
 # Build the kernel at `dir` (--kernel) or the program at `dir`; release
 # unless --set says otherwise.
 def "main build" [dir: path, --kernel, --set: string = ""] {
@@ -815,6 +958,12 @@ def "main run" [dir: path, --set: string = "", --api] {
     run-program $dir (with-host (symbols $set)) $api
 }
 
+# Build the program at `dir` and probe it under a window for --seconds;
+# release unless --set says otherwise. `sdl` is the one probe.
+def "main probe" [dir: path, kind: string, --seconds: int = 12, --set: string = ""] {
+    probe $dir $kind (with-host (symbols $set)) $seconds
+}
+
 # Remove the kernel's (--kernel) or the program's build output from both
 # trees.
 def "main clean" [dir: path, --kernel] {
@@ -825,5 +974,5 @@ def "main clean" [dir: path, --kernel] {
 }
 
 def main [] {
-    print "nu jab.nu <build|test|clean> <dir> [--kernel] [--set names]; nu jab.nu run <dir> [--set names] [--api]; nu jab.nu workspace <build|test|run> <ws> [category [name]] [--set names] [--api]; nu jab.nu watch"
+    print "nu jab.nu <build|test|clean> <dir> [--kernel] [--set names]; nu jab.nu run <dir> [--set names] [--api]; nu jab.nu probe <dir> sdl [--seconds N] [--set names]; nu jab.nu workspace <build|test|run> <ws> [category [name]] [--set names] [--api]; nu jab.nu workspace probe <ws> sdl <category> <name> [--seconds N]; nu jab.nu watch <ws>; nu jab.nu watched <ws> [--skip N]"
 }
