@@ -1,12 +1,14 @@
 //! What the expected devices are for LowKick's tools and launchers,
 //! answered blind: today the gamepad, one record or none, as pretty
-//! NUON. gilrs enumerates the pads the host knows about; the expected
-//! one is the first connected pad with a known mapping, else the first
-//! connected. On Linux its evdev path is what QEMU's host-input device
-//! takes; elsewhere the path is null and the name still tells a
-//! launcher what is there.
+//! NUON. gilrs enumerates every device it can attach a mapping to,
+//! which takes in more than gamepads, so the expected one is the first
+//! connected device whose mapping has a South button and either a left
+//! stick or a dpad, what a gamepad has and a control board does not;
+//! with none of those there is no gamepad. On Linux its evdev path is
+//! what QEMU's host-input device takes; elsewhere the path is null and
+//! the name still tells a launcher what is there.
 
-use gilrs::{Gilrs, MappingSource};
+use gilrs::{Axis, Button, Gilrs};
 
 /// The expected gamepad.
 struct Gamepad {
@@ -59,22 +61,27 @@ fn number(value: Option<u16>) -> String {
     }
 }
 
-/// The first connected pad with a known mapping, else the first
-/// connected; none when gilrs finds nothing or cannot start.
+/// Whether a device gilrs lists is a gamepad: its mapping has a South
+/// button and a left stick or a dpad. A device that merely has some
+/// buttons, a fan or power controller with a control interface, does
+/// not pass.
+fn is_gamepad(pad: &gilrs::Gamepad) -> bool {
+    pad.button_code(Button::South).is_some()
+        && (pad.axis_code(Axis::LeftStickX).is_some() || pad.button_code(Button::DPadLeft).is_some())
+}
+
+/// The first connected gamepad; none when gilrs finds nothing that is
+/// one, or cannot start.
 fn expected_gamepad() -> Option<Gamepad> {
     let gilrs = match Gilrs::new() {
         Ok(gilrs) => gilrs,
         Err(gilrs::Error::NotImplemented(gilrs)) => gilrs,
         Err(_) => return None,
     };
-    let connected: Vec<_> = gilrs.gamepads().filter(|(_, pad)| pad.is_connected()).collect();
-    let (_, pad) = connected
-        .iter()
-        .find(|(_, pad)| pad.mapping_source() != MappingSource::None)
-        .or_else(|| connected.first())?;
+    let (_, pad) = gilrs.gamepads().find(|(_, pad)| pad.is_connected() && is_gamepad(pad))?;
     Some(Gamepad {
         name: pad.os_name().to_string(),
-        path: device_path(pad),
+        path: device_path(&pad),
         vendor: pad.vendor_id(),
         product: pad.product_id(),
     })
