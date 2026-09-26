@@ -3,9 +3,9 @@
 version = 4
 
 [[package]]
-name = "evdev_shim"
+name = "jabshim_evdev"
 version = "0.0.0-1"
 
 [[package]]
-name = "sdl_shim"
+name = "jabshim_sdl"
 version = "0.0.0-1"

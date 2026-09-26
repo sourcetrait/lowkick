@@ -50,15 +50,16 @@ frame_flipped:
 # sys_await (jab.await): a0 is the mask of events to wait for, 0 for
 # all of them: the display's next tick (JAB_AWAIT_DISPLAY), a key event
 # (JAB_AWAIT_KEYBOARD), which brings the keyboard up and is dropped from
-# the mask when there is none, and bytes from the host over the API
-# (JAB_AWAIT_API), dropped when the machine has no API port. a0 becomes
-# the events that ended the wait, 0 when nothing in the mask can
-# happen.
+# the mask when there is none, bytes from the host over the API
+# (JAB_AWAIT_API), dropped when the machine has no API port, and a pad
+# event (JAB_AWAIT_PAD), which brings the pad up and is dropped when
+# there is none. a0 becomes the events that ended the wait, 0 when
+# nothing in the mask can happen.
 .global sys_await
 sys_await:
     mv s0, a0
     bnez s0, 1f
-    li s0, JAB_AWAIT_DISPLAY | JAB_AWAIT_KEYBOARD | JAB_AWAIT_API
+    li s0, JAB_AWAIT_DISPLAY | JAB_AWAIT_KEYBOARD | JAB_AWAIT_API | JAB_AWAIT_PAD
 1:
     andi t0, s0, JAB_AWAIT_KEYBOARD
     beqz t0, 2f
@@ -72,6 +73,12 @@ sys_await:
     bnez a0, 20f
     andi s0, s0, ~JAB_AWAIT_API
 20:
+    andi t0, s0, JAB_AWAIT_PAD
+    beqz t0, 23f
+    call pad_open
+    beqz a0, 23f
+    andi s0, s0, ~JAB_AWAIT_PAD
+23:
     li a0, 0
     beqz s0, 9f
     # the display's tick: a tick already past moves forward, period by
@@ -93,7 +100,7 @@ sys_await:
     li t4, SIE_STIE
     csrs sie, t4
 3:
-    andi t0, s0, JAB_AWAIT_KEYBOARD | JAB_AWAIT_API
+    andi t0, s0, JAB_AWAIT_KEYBOARD | JAB_AWAIT_API | JAB_AWAIT_PAD
     beqz t0, 4f
     li t4, SIE_SEIE
     csrs sie, t4
@@ -120,6 +127,12 @@ sys_await:
     beqz a0, 60f
     ori s1, s1, JAB_AWAIT_API
 60:
+    andi t0, s0, JAB_AWAIT_PAD
+    beqz t0, 61f
+    call pad_pending
+    beqz a0, 61f
+    ori s1, s1, JAB_AWAIT_PAD
+61:
     bnez s1, 7f
     wfi
     call plic_service

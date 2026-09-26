@@ -1,6 +1,7 @@
 # jab.inc: the Jab SDK header. `.include "jab.inc"` and call the kernel
 # with the jab.* macros, assembler style: `jab.print message`.
 .include "jab_keys.inc"
+.include "jab_pad.inc"
 
 # Where a program lives. The machine has 4 GiB of RAM from 0x80000000;
 # the kernel keeps the first 2 MiB and the framebuffer the 8 MiB after
@@ -30,11 +31,13 @@
 # The time counter: `rdtime` reads it, JAB_TIME_HZ ticks a second.
 .set JAB_TIME_HZ, 10000000
 
-# What jab.await waits for: a mask of these, or 0 for all of them
+# What jab.await waits for: a mask of these, or 0 for all of them; a
+# source the machine lacks drops out of the mask
 .set JAB_AWAIT_ALL, 0
 .set JAB_AWAIT_DISPLAY, 1
 .set JAB_AWAIT_KEYBOARD, 2
 .set JAB_AWAIT_API, 4
+.set JAB_AWAIT_PAD, 8
 
 # System call numbers (doc/syscalls.nuon)
 .set JAB_SYS_EXIT, 1
@@ -68,6 +71,34 @@
 .set JAB_SYS_SPRITE_LOAD, 29
 .set JAB_SYS_DISPLAY_FLIP_RECTS, 30
 .set JAB_SYS_KERNEL_FLAGS, 31
+.set JAB_SYS_PAD_READ, 32
+.set JAB_SYS_PAD_INPUT, 33
+.set JAB_SYS_PAD_AXIS, 34
+
+# The pad: a gamepad the host passed through as a virtio-input device.
+# jab.pad.read fills a state record of JAB_PAD_ENTRY bytes, on a 4-byte
+# boundary: JAB_PAD_KEYS, a 32-bit mask of the gamepad's keys, bit n
+# for the code JAB_BTN_GAMEPAD + n (jab_pad.inc), then JAB_PAD_AXES,
+# JAB_PAD_AXIS_COUNT signed 16-bit values indexed by the axis's own
+# code, JAB_ABS_X and the rest, each normalised to -JAB_PAD_FULL through
+# JAB_PAD_FULL from the axis's own range: a centred axis reads 0 across
+# its flat band about the middle of its range and rescales to full
+# scale at either end; ABS_GAS and ABS_BRAKE, one-sided, read 0 to
+# JAB_PAD_FULL; a hat reads -JAB_PAD_FULL, 0, or JAB_PAD_FULL; an axis
+# the pad lacks, or one that has not moved since the program started,
+# reads 0. The pad's own range for an axis is JAB_PAD_AXIS_ENTRY bytes
+# from jab.pad.axis, five signed 32-bit fields as virtio reports them.
+.set JAB_PAD_ENTRY, 132
+.set JAB_PAD_KEYS, 0
+.set JAB_PAD_AXES, 4
+.set JAB_PAD_AXIS_COUNT, 64
+.set JAB_PAD_FULL, 32767
+.set JAB_PAD_AXIS_ENTRY, 20
+.set JAB_PAD_AXIS_MIN, 0
+.set JAB_PAD_AXIS_MAX, 4
+.set JAB_PAD_AXIS_FUZZ, 8
+.set JAB_PAD_AXIS_FLAT, 12
+.set JAB_PAD_AXIS_RES, 16
 
 # What the kernel was built with, as jab.kernel.flags reports it: a
 # mask of these. JAB_KERNEL_DEBUG: DEBUG was set, so the kernel's own
@@ -381,8 +412,9 @@
 # jab.await mask=JAB_AWAIT_ALL: halt until an event in the mask: the
 # display's next frame tick (JAB_AWAIT_DISPLAY), a key event waiting
 # (JAB_AWAIT_KEYBOARD), bytes from the host waiting on the API
-# (JAB_AWAIT_API), or any of them (JAB_AWAIT_ALL). How a program idles
-# between frames instead of spinning. a0 becomes the events that fired.
+# (JAB_AWAIT_API), a pad event waiting (JAB_AWAIT_PAD), or any of them
+# (JAB_AWAIT_ALL). How a program idles between frames instead of
+# spinning. a0 becomes the events that fired.
 .macro jab.await mask=JAB_AWAIT_ALL
     li a0, \mask
     li a7, JAB_SYS_AWAIT
@@ -402,6 +434,46 @@
 # jab.api.await: jab.await for bytes from the host over the API.
 .macro jab.api.await
     jab.await JAB_AWAIT_API
+.endm
+
+# jab.pad.await: jab.await for a pad event.
+.macro jab.pad.await
+    jab.await JAB_AWAIT_PAD
+.endm
+
+# jab.pad.read record: the pad's state now, written into the record,
+# JAB_PAD_ENTRY bytes on a 4-byte boundary: the keys held and every
+# axis normalised, as jab.inc describes above. The pad comes up on the
+# first pad call. a0 becomes 0 with the record written, or 1 when the
+# machine carries no pad.
+.macro jab.pad.read record
+    mv a0, \record
+    li a7, JAB_SYS_PAD_READ
+    ecall
+.endm
+
+# jab.pad.input: the next pad event, in evdev's own terms. a0 becomes
+# the event's type, JAB_EV_KEY or JAB_EV_ABS, or 0 when no event is
+# waiting; a1 its code, a JAB_BTN_* or JAB_ABS_*; a2 its value, signed:
+# for a key JAB_KEY_PRESSED, JAB_KEY_RELEASED, or JAB_KEY_HELD, for an
+# axis the raw reading the pad sent. Call it until a0 is 0 to take
+# everything that arrived. A machine with no pad never has an event.
+.macro jab.pad.input
+    li a7, JAB_SYS_PAD_INPUT
+    ecall
+.endm
+
+# jab.pad.axis buffer, code: the pad's own range for that axis, a
+# JAB_ABS_* constant, written into the buffer as JAB_PAD_AXIS_ENTRY
+# bytes: min, max, fuzz, flat, and resolution, each a signed 32-bit
+# field as the pad reports them, on a 4-byte boundary. a0 becomes 0
+# with the record written; 1 when the machine carries no pad; 2 when
+# the pad has no such axis.
+.macro jab.pad.axis buffer, code
+    li a1, \code
+    mv a0, \buffer
+    li a7, JAB_SYS_PAD_AXIS
+    ecall
 .endm
 
 # The API: bytes both ways between the program and the host over a port

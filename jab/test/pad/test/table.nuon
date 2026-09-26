@@ -1,0 +1,20 @@
+# pad's table: one event a report, so each pad line has its own state
+# line after it. The left stick full right, then down, then part way
+# right, then inside the flat band, then centred; the hat left and
+# back; the right trigger pulled and let go; a scan code that the
+# kernel drops, with South pressed and released.
+[
+    [at, type, code, value];
+    [1000ms, 3, 0, 255],
+    [1200ms, 3, 1, 0],
+    [1400ms, 3, 0, 200],
+    [1600ms, 3, 0, 135],
+    [1800ms, 3, 1, 127],
+    [2000ms, 3, 16, -1],
+    [2200ms, 3, 16, 0],
+    [2400ms, 3, 9, 255],
+    [2600ms, 3, 9, 0],
+    [2800ms, 4, 4, 589825],
+    [2800ms, 1, 304, 1],
+    [3000ms, 1, 304, 0],
+]

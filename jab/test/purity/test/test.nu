@@ -16,6 +16,8 @@ const debug_text = [
     "jab: exit "
     "jab: keyboard at "
     "jab: no keyboard"
+    "jab: pad at "
+    "jab: no pad"
     "jab: gpu at "
     "jab: gpu cmd="
     "jab: display "

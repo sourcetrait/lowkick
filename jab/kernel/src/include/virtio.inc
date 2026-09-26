@@ -175,12 +175,32 @@
 # virtio-input's config: a select and a subselect byte pick what the
 # payload at VIRTIO_INPUT_CFG_DATA describes, and size says how long it
 # is; EV_BITS with an event type gives the bitmap of the codes the
-# device can send
+# device can send, and ABS_INFO with an axis code its absinfo, five
+# little-endian 32-bit fields: min, max, fuzz, flat, resolution
 .set VIRTIO_INPUT_CFG_SELECT, 0
 .set VIRTIO_INPUT_CFG_SUBSEL, 1
 .set VIRTIO_INPUT_CFG_SIZE, 2
 .set VIRTIO_INPUT_CFG_DATA, 8
 .set VIRTIO_INPUT_CFG_EV_BITS, 0x11
+.set VIRTIO_INPUT_CFG_ABS_INFO, 0x12
+.set VIRTIO_INPUT_ABS_MIN, 0
+.set VIRTIO_INPUT_ABS_MAX, 4
+.set VIRTIO_INPUT_ABS_FUZZ, 8
+.set VIRTIO_INPUT_ABS_FLAT, 12
+.set VIRTIO_INPUT_ABS_RES, 16
+.set VIRTIO_INPUT_ABS_SIZE, 20
+
+# The pad's event queue is the other wide one: the device fills a
+# buffer per event, a pad sends several a report at over a hundred
+# reports a second, and the kernel drains only when the program calls
+# or waits, so PADQ_SIZE buffers stand offered. The record is the
+# GPU's shape without a pending count.
+.set PADQ_SIZE, 64
+.set PADQ_DESC, 0
+.set PADQ_AVAIL, (PADQ_DESC + PADQ_SIZE * VIRTQ_DESC_SIZE)
+.set PADQ_USED, (PADQ_AVAIL + ((6 + 2 * PADQ_SIZE + 3) / 4) * 4)
+.set PADQ_LAST_USED, (PADQ_USED + ((6 + 8 * PADQ_SIZE + 7) / 8) * 8)
+.set PADQ_BYTES, (PADQ_LAST_USED + 8)
 
 # virtio-blk: the capacity, in 512-byte sectors, opens the config space
 # as a little-endian 64-bit value, read as two words since the transport
@@ -207,3 +227,5 @@
 .set VIRTIO_INPUT_EVENT_SIZE, 8
 .set EV_SYN, 0
 .set EV_KEY, 1
+.set EV_ABS, 3
+.set EV_MSC, 4
