@@ -8,20 +8,28 @@
 # pad is given a colour of its own at startup, drawn at random, and
 # pressing it paints your sphere that colour. South and the colour
 # buttons announce themselves too: the button's evdev name, NORTH and
-# the rest, in bold off-white at the top of the screen; the stick and
-# the dpad show themselves by moving the sphere and say nothing. With
-# no push it slows to a stop; the walls bounce it back at the speed it
-# hit them, and so does the other sphere. The other sphere starts
-# somewhere and bounces off the walls as in bounce, and off your
-# sphere too. The two never overlap. Positions and speeds carry FIX
-# fractional bits.
+# the rest, centred at the top of the screen in bold off-white at one
+# and a half times the console's font, staying while the button is
+# held and three seconds after it is released, or until another
+# button takes its place; at startup the pad's own name, as the device
+# reports it, shows there for three seconds. The stick and the dpad
+# show themselves by moving the sphere and say nothing. The right
+# stick paints your sphere a colour made from its exact position, red
+# from its x, green from its y, blue from how far it is pushed, so the
+# stick's precision is seen, and it drives the sphere too, in its own
+# direction at a strength by thirds of its throw past the dead zone:
+# half of ACCEL, ACCEL, and one and a half. With no push the sphere
+# slows to a stop; the walls bounce it back at the speed it hit them,
+# and so does the other sphere. The other sphere starts somewhere and
+# bounces off the walls as in bounce, and off your sphere too. The two
+# never overlap. Positions and speeds carry FIX fractional bits.
 #
-# The pad is read as a state each tick: the stick's two axes come
+# The pad is read as a state each tick: the sticks' axes come
 # normalised to -JAB_PAD_FULL through JAB_PAD_FULL, 0 at rest, and the
-# drive is ACCEL scaled by each over full scale; the hat's axes at full
-# scale add ACCEL outright. The stop is an event, South pressed, taken
-# from jab.pad.input. With no pad on the machine the state reads zero
-# and the example runs on the keyboard alone.
+# left stick's drive is ACCEL scaled by each over full scale; the hat's
+# axes at full scale add ACCEL outright. The stop is an event, South
+# pressed, taken from jab.pad.input. With no pad on the machine the
+# state reads zero and the example runs on the keyboard alone.
 #
 # Over the API, wasd's records both ways, little-endian, each field at
 # its own width. The host drives with key events of CMD_SIZE bytes, the
@@ -92,15 +100,22 @@
 .set BUTTONS, 32
 .set COLOR_FLOOR, 64
 .set COLOR_SPAN, 192
-# The button's name at the top of the screen: the strip it is drawn
-# in, cleared before each name, wide enough for the longest and the
-# bold strike, in off-white
-.set LABEL_X, 16
+# The label at the top of the screen: a strip the screen's width,
+# cleared before each name, the name centred in it in off-white at one
+# and a half times the font, bold; it stays LABEL_TICKS after the
+# button is released, three seconds
+.set LABEL_SCALE, 384
+.set LABEL_CELL, (JAB_TEXT_WIDTH * LABEL_SCALE / 256)
+.set LABEL_HEIGHT, (JAB_TEXT_HEIGHT * LABEL_SCALE / 256)
 .set LABEL_Y, 16
-.set LABEL_WIDTH, (6 * JAB_TEXT_WIDTH + 1)
-.set LABEL_HEIGHT, JAB_TEXT_HEIGHT
 .set LABEL_COLOR, 0x00ebe6dc
+.set LABEL_TICKS, (3 * JAB_DISPLAY_FPS_CAP)
 .set NAMED_BUTTONS, 16
+.set NO_BUTTON, -1
+# The right stick drives by thirds of its throw, in halves of ACCEL,
+# so the strongest push is ACCEL_MAX, which nothing exceeds
+.set ACCEL_MAX, (ACCEL * 3 / 2)
+.set BAND, (JAB_PAD_FULL / 3)
 
 .section .text
 .global _start
@@ -119,6 +134,43 @@ _start:
     la t1, rand_state
     sd t0, 0(t1)
     call assign_colors
+    # the pad's own name at the top for three seconds, when there is
+    # one
+    la t0, pad_name
+    jab.pad.name t0
+    bnez a0, 2f
+    la t0, pad_name
+    la t1, label_text
+    sd t0, 0(t1)
+    li t0, NO_BUTTON
+    la t1, label_code
+    sd t0, 0(t1)
+    li t0, LABEL_TICKS
+    la t1, label_ticks
+    sd t0, 0(t1)
+    la t1, label_changed
+    li t0, 1
+    sb t0, 0(t1)
+2:
+    # the right stick: Z and RZ on this pad, RX and RY on one laid out
+    # the other way, as byte offsets into the state
+    li t0, JAB_PAD_AXES + 2 * JAB_ABS_Z
+    la t1, right_x
+    sd t0, 0(t1)
+    li t0, JAB_PAD_AXES + 2 * JAB_ABS_RZ
+    la t1, right_y
+    sd t0, 0(t1)
+    la t0, axis_record
+    jab.pad.axis t0, JAB_ABS_Z
+    li t1, 2
+    bne a0, t1, 3f
+    li t0, JAB_PAD_AXES + 2 * JAB_ABS_RX
+    la t1, right_x
+    sd t0, 0(t1)
+    li t0, JAB_PAD_AXES + 2 * JAB_ABS_RY
+    la t1, right_y
+    sd t0, 0(t1)
+3:
     # your sphere at the centre, still, on the black the framebuffer
     # starts with
     li t0, (JAB_DISPLAY_WIDTH / 2) * ONE
@@ -161,6 +213,8 @@ frame:
     beqz t0, frame
     la t0, pad_state
     jab.pad.read t0
+    call label_tick
+    call right_stick
     call move_player
     call move_ball
     call collide
@@ -230,34 +284,57 @@ read_api:
     addi sp, sp, 48
     ret
 
-# read_pad: take every pad event waiting; South pressed stops your
-# sphere, any other button pressed paints it that button's colour, and
-# the axes are read as state each tick.
+# read_pad: take every pad event waiting; a button pressed announces
+# itself, South stopping your sphere and any other painting it that
+# button's colour; the announced button released starts its name's
+# three seconds; the axes are read as state each tick.
 read_pad:
 1:
     jab.pad.input
     beqz a0, 9f
     li t0, JAB_EV_KEY
     bne a0, t0, 1b
-    li t0, JAB_KEY_PRESSED
-    bne a2, t0, 1b
     addi t0, a1, -JAB_BTN_GAMEPAD
     li t1, BUTTONS
     bgeu t0, t1, 1b
-    # the button announces itself
+    li t1, JAB_KEY_PRESSED
+    beq a2, t1, 3f
+    bnez a2, 1b                 # held: nothing new
+    # released: the announced button's name starts to go
+    la t1, label_code
+    ld t1, 0(t1)
+    bne a1, t1, 1b
+    li t1, LABEL_TICKS
+    la t2, label_ticks
+    sd t1, 0(t2)
+    j 1b
+3:
+    # pressed: its name, staying while it is held
     la t1, label_code
     sd a1, 0(t1)
+    la t1, label_ticks
+    sd zero, 0(t1)
+    li t3, NAMED_BUTTONS - 1
+    bgeu t0, t3, 4f
+    mv t3, t0
+4:
+    slli t3, t3, 3
+    la t1, button_names
+    add t1, t1, t3
+    ld t1, 0(t1)
+    la t2, label_text
+    sd t1, 0(t2)
     la t1, label_changed
     li t2, 1
     sb t2, 0(t1)
     li t1, JAB_BTN_SOUTH
-    bne a1, t1, 2f
+    bne a1, t1, 6f
     la t0, player_vx
     sd zero, 0(t0)
     la t0, player_vy
     sd zero, 0(t0)
     j 1b
-2:
+6:
     slli t0, t0, 2
     la t1, button_colors
     add t1, t1, t0
@@ -271,6 +348,83 @@ read_pad:
     sb t0, 0(t1)
     j 1b
 9:
+    ret
+
+# label_tick: a tick of the name's three seconds, once they have
+# started; at their end the strip is cleared.
+label_tick:
+    la t0, label_ticks
+    ld t1, 0(t0)
+    beqz t1, 9f
+    addi t1, t1, -1
+    sd t1, 0(t0)
+    bnez t1, 9f
+    la t1, name_none
+    la t2, label_text
+    sd t1, 0(t2)
+    li t1, NO_BUTTON
+    la t2, label_code
+    sd t1, 0(t2)
+    la t2, label_changed
+    li t1, 1
+    sb t1, 0(t2)
+9:
+    ret
+
+# right_stick: with the right stick off its rest, your sphere's colour
+# from its exact position: red from x, green from y, each across the
+# stick's whole travel, and blue from how far it is pushed.
+right_stick:
+    addi sp, sp, -32
+    sd ra, 24(sp)
+    call right_axes
+    or t1, a0, a1
+    beqz t1, 9f
+    sd a0, 0(sp)
+    sd a1, 8(sp)
+    mul a2, a0, a0
+    mul a3, a1, a1
+    add a0, a2, a3
+    call isqrt
+    li t2, JAB_PAD_FULL
+    bleu a0, t2, 1f
+    mv a0, t2
+1:
+    li t4, 255
+    mul a0, a0, t4
+    divu a0, a0, t2             # blue, from how far
+    li t5, 2 * JAB_PAD_FULL
+    ld t3, 0(sp)
+    add t3, t3, t2
+    mul t3, t3, t4
+    divu t3, t3, t5             # red, from x
+    ld t6, 8(sp)
+    add t6, t6, t2
+    mul t6, t6, t4
+    divu t6, t6, t5             # green, from y
+    slli t3, t3, 16
+    slli t6, t6, 8
+    or t3, t3, t6
+    or t3, t3, a0
+    la t0, player_color
+    sw t3, 0(t0)
+9:
+    ld ra, 24(sp)
+    addi sp, sp, 32
+    ret
+
+# right_axes: the right stick's axes from the state, a0 across and a1
+# down, normalised. Clobbers t0 and t1 only.
+right_axes:
+    la t0, pad_state
+    la t1, right_x
+    ld t1, 0(t1)
+    add t1, t1, t0
+    lh a0, 0(t1)
+    la t1, right_y
+    ld t1, 0(t1)
+    add t1, t1, t0
+    lh a1, 0(t1)
     ret
 
 # assign_colors: a colour for every button, at random.
@@ -368,10 +522,14 @@ apply_key:
     ret
 
 # drive_vector: the acceleration this frame, a0 along x and a1 along y
-# in fixed point: the held keys at ACCEL each way, the stick's axes at
-# ACCEL scaled by each over full scale, and the hat's at ACCEL outright,
-# the sum held within ACCEL either way.
+# in fixed point: the held keys at ACCEL each way, the left stick's
+# axes at ACCEL scaled by each over full scale, the hat's at ACCEL
+# outright, and the right stick's along its own direction at half of
+# ACCEL, ACCEL, or one and a half by thirds of its throw, the sum held
+# within ACCEL_MAX either way.
 drive_vector:
+    addi sp, sp, -48
+    sd ra, 40(sp)
     la t0, held_d
     lbu a0, 0(t0)
     la t0, held_a
@@ -413,7 +571,53 @@ drive_vector:
 21:
     sub a1, a1, t1
 2:
-    # held within ACCEL
+    # the right stick: how far it is pushed, which third of the way
+    # that is, and that strength along its direction
+    sd a0, 0(sp)
+    sd a1, 8(sp)
+    call right_axes
+    or t4, a0, a1
+    beqz t4, 7f
+    sd a0, 16(sp)
+    sd a1, 24(sp)
+    mul a0, a0, a0
+    mul t4, a1, a1
+    add a0, a0, t4
+    call isqrt
+    beqz a0, 7f
+    mv t5, a0                   # how far, the direction's length
+    li t6, JAB_PAD_FULL
+    bleu a0, t6, 22f
+    mv a0, t6
+22:
+    li t4, BAND
+    li t1, 1                    # the low third, half of ACCEL
+    bleu a0, t4, 23f
+    li t1, 2                    # the middle, ACCEL
+    slli t4, t4, 1
+    bleu a0, t4, 23f
+    li t1, 3                    # the high, one and a half
+23:
+    li t4, ACCEL
+    mul t1, t1, t4
+    slli t4, t5, 1
+    ld t2, 16(sp)
+    mul t2, t2, t1
+    div t2, t2, t4
+    ld t3, 24(sp)
+    mul t3, t3, t1
+    div t3, t3, t4
+    ld a0, 0(sp)
+    ld a1, 8(sp)
+    add a0, a0, t2
+    add a1, a1, t3
+    j 8f
+7:
+    ld a0, 0(sp)
+    ld a1, 8(sp)
+8:
+    # held within ACCEL_MAX
+    li t1, ACCEL_MAX
     ble a0, t1, 3f
     mv a0, t1
 3:
@@ -427,6 +631,8 @@ drive_vector:
     bge a1, t2, 6f
     mv a1, t2
 6:
+    ld ra, 40(sp)
+    addi sp, sp, 48
     ret
 
 # drive: a0 is a speed and a1 the acceleration on it this frame; a0
@@ -1054,11 +1260,10 @@ render:
     sw a1, JAB_RECT_Y(t0)
     sw a2, JAB_RECT_WIDTH(t0)
     sw a3, JAB_RECT_HEIGHT(t0)
-    li t1, LABEL_X
-    sw t1, (JAB_RECT_SIZE + JAB_RECT_X)(t0)
+    sw zero, (JAB_RECT_SIZE + JAB_RECT_X)(t0)
     li t1, LABEL_Y
     sw t1, (JAB_RECT_SIZE + JAB_RECT_Y)(t0)
-    li t1, LABEL_WIDTH
+    li t1, JAB_DISPLAY_WIDTH
     sw t1, (JAB_RECT_SIZE + JAB_RECT_WIDTH)(t0)
     li t1, LABEL_HEIGHT
     sw t1, (JAB_RECT_SIZE + JAB_RECT_HEIGHT)(t0)
@@ -1075,34 +1280,44 @@ render:
     addi sp, sp, 16
     ret
 
-# draw_label: the strip cleared, then the last announced button's
-# name in it, bold off-white; a button with no name leaves it clear.
+# draw_label: the strip cleared across the screen, then the label's
+# text centred in it, bold off-white at the label's scale; an empty
+# text leaves it clear.
 draw_label:
     addi sp, sp, -16
     sd ra, 8(sp)
-    li a0, LABEL_X
+    li a0, 0
     li a1, LABEL_Y
-    li a2, LABEL_WIDTH
+    li a2, JAB_DISPLAY_WIDTH
     li a3, LABEL_HEIGHT
     li a4, BACKGROUND
     call fill_rect
-    la t0, label_code
-    ld t0, 0(t0)
-    addi t0, t0, -JAB_BTN_GAMEPAD
-    li t1, NAMED_BUTTONS
-    bltu t0, t1, 1f
-    li t0, NAMED_BUTTONS - 1
+    la t0, label_text
+    ld a0, 0(t0)
+    # its width: a cell a character, and the bold strike
+    mv t1, a0
+    li t2, 0
 1:
-    slli t0, t0, 3
-    la t1, button_names
-    add t1, t1, t0
-    ld a0, 0(t1)
-    li a1, LABEL_X
+    lbu t3, 0(t1)
+    beqz t3, 2f
+    addi t1, t1, 1
+    addi t2, t2, 1
+    j 1b
+2:
+    beqz t2, 9f
+    li t3, LABEL_CELL
+    mul t2, t2, t3
+    addi t2, t2, 1
+    li a1, JAB_DISPLAY_WIDTH
+    sub a1, a1, t2
+    srai a1, a1, 1
     li a2, LABEL_Y
     li a3, LABEL_COLOR
     li a4, JAB_TEXT_BOLD
+    li a5, LABEL_SCALE
     li a7, JAB_SYS_DISPLAY_TEXT
     ecall
+9:
     ld ra, 8(sp)
     addi sp, sp, 16
     ret
@@ -1286,21 +1501,33 @@ color_code:
     .skip 8
 label_code:
     .skip 8
+label_text:
+    .skip 8
+label_ticks:
+    .skip 8
 report_buffer:
     .skip REPORT_MAX * REPORT_SIZE
 cmd_read:
     .skip CMD_READ_BYTES
 cmd_partial:
     .skip CMD_SIZE
+right_x:
+    .skip 8
+right_y:
+    .skip 8
 .balign 4
 pad_state:
     .skip JAB_PAD_ENTRY
+axis_record:
+    .skip JAB_PAD_AXIS_ENTRY
 button_colors:
     .skip BUTTONS * 4
 player_color:
     .skip 4
 rects:
     .skip 2 * JAB_RECT_SIZE
+pad_name:
+    .skip JAB_PAD_NAME_BYTES
 color_changed:
     .skip 1
 label_changed:

@@ -75,15 +75,17 @@ def cpu-model []: nothing -> string {
 def machine-args []: nothing -> list<string> {
     ["-machine" "virt" "-cpu" (cpu-model)] ++ $machine_rest
 }
-# The guest is named jab and so are the threads (CPU 0/TCG and the
-# rest), so a per-thread listing reads; on Linux the process is named
-# jab too, so `pgrep -x jab` finds it. `-name jab` alone names only the
+# The guest is named for the program, `Jab: <program>`, which is what
+# QEMU's window shows after its own prefix (SDL adds the console's
+# index, `QEMU (Jab: pad-0)`), and the threads are named (CPU 0/TCG and
+# the rest), so a per-thread listing reads; on Linux the process is
+# named jab, so `pgrep -x jab` finds it. `-name` alone names only the
 # guest, and `process=` is a Linux prctl that QEMU refuses to start
 # without elsewhere ("Change of process name not supported by your
 # OS"), so the process name is Linux's alone.
-def name-args []: nothing -> list<string> {
+def name-args [program: string]: nothing -> list<string> {
     let process = (if $nu.os-info.name == "linux" { ",process=jab" } else { "" })
-    ["-name" $"jab($process),debug-threads=on"]
+    ["-name" $"Jab: ($program)($process),debug-threads=on"]
 }
 const display_device = ["-device" "virtio-gpu-device,xres=1920,yres=1080"]
 const input_devices = [
@@ -143,7 +145,7 @@ export def launch [
     let gamepad = (pad-setup $pad $out)
     let args = ([
         "--signal=TERM" $"($seconds)" "qemu-system-riscv64"
-    ] ++ (machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $inputs ++ $ports.args ++ $gamepad.args ++ [
+    ] ++ (machine-args) ++ (name-args ($image | path parse | get stem)) ++ $memory ++ $display_device ++ $inputs ++ $ports.args ++ $gamepad.args ++ [
         "-bios" "none" "-kernel" ($kernel | path expand)
         "-device" $"loader,file=($image | path expand),addr=($program_base),force-raw=on"
         "-display" "none" "-monitor" $"pipe:($monitor)" "-serial" $"file:($log)"
@@ -450,11 +452,11 @@ def wait-for-file [path: path]: nothing -> nothing {
 }
 
 # The Jab QEMU processes on this host, by their command line, which
-# every Jab line marks with `-name jab`: the QEMU itself, never the
+# every Jab line marks with `-name Jab:`: the QEMU itself, never the
 # `timeout` a test wraps it in, whose command line carries the same
 # words.
 def jab-pids []: nothing -> list<int> {
-    ps -l | where {|p| (($p.command | split row " " | first | path basename) == "qemu-system-riscv64") and ($p.command | str contains "-name jab") } | get pid
+    ps -l | where {|p| (($p.command | split row " " | first | path basename) == "qemu-system-riscv64") and ($p.command | str contains "-name Jab:") } | get pid
 }
 
 # The threads of a process with their cumulative CPU seconds: on Linux
@@ -810,7 +812,7 @@ def run-line [dir: path, names: list<string>, api: bool, window: oneof<string, n
     let ports = (ports $c.symbols $c.out $api)
     let inputs = (if $kbm { $input_devices } else { [] })
     let gamepad = (if $pad { gamepad-args $c.workspace } else { [] })
-    let args = ((machine-args) ++ (name-args) ++ $memory ++ $display_device ++ $inputs ++ $gamepad ++ $devices ++ (disk-args $disk $disk_serial) ++ $ports.args ++ [
+    let args = ((machine-args) ++ (name-args $c.manifest.name) ++ $memory ++ $display_device ++ $inputs ++ $gamepad ++ $devices ++ (disk-args $disk $disk_serial) ++ $ports.args ++ [
         "-bios" "none" "-kernel" $ready.kernel
         "-device" $"loader,file=($ready.image),addr=($program_base),force-raw=on"
         "-display" $shown "-serial" $serial "-monitor" "none"

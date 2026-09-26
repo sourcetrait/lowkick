@@ -1,7 +1,8 @@
 # pad's integration test: a gamepad shaped like the reference pad,
 # attached through the evdev shim and played from table.nuon, is found
-# by the kernel and read as the program expects: the ranges it reports
-# for three axes and none for a fourth, every event in evdev's terms
+# by the kernel and read as the program expects: its name as the
+# device reports it, the ranges it reports for three axes and none for
+# a fourth, every event in evdev's terms
 # and, after each, the state normalised, the keys as a mask, the left
 # stick full scale at its ends, part way in between, 0 inside its flat
 # band and at centre, the hat at full scale, the trigger one-sided, a
@@ -11,6 +12,7 @@ use std/assert
 
 const expected = [
     "pad: ready"
+    "name 8BitDo Ultimate"
     "axis 0 0 255 0 15 0"
     "axis 9 0 255 0 15 0"
     "axis 16 -1 1 0 0 0"

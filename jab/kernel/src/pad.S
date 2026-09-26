@@ -128,8 +128,33 @@ sys_pad_axis:
     sd a0, 80(sp)
     j trap_return
 
+# sys_pad_name (jab.pad.name): a0 is a buffer of JAB_PAD_NAME_BYTES
+# inside the program's window. a0 becomes 0 with the pad's name in it,
+# NUL-terminated, or 1 with no pad; a1 the name's length.
+.global sys_pad_name
+sys_pad_name:
+    ld a0, 80(sp)
+    li a1, JAB_PAD_NAME_BYTES
+    call buffer_bounds
+    call pad_open
+    bnez a0, 7f
+    ld a0, 80(sp)
+    la a1, pad_name
+    li a2, JAB_PAD_NAME_BYTES
+    call copy_bytes
+    la t0, pad_name_length
+    ld t0, 0(t0)
+    sd zero, 80(sp)
+    sd t0, 88(sp)
+    j trap_return
+7:
+    li a0, 1
+    sd a0, 80(sp)
+    sd zero, 88(sp)
+    j trap_return
+
 # pad_open: find the pad and bring it up, its queue stocked, its line
-# let through, and its axes' ranges read. Returns 0, or 1 with no pad
+# let through, its axes' ranges read, and its name. Returns 0, or 1 with no pad
 # on the machine, 2 when the device refuses the kernel; asked again it
 # answers as before at once. Keeps the s registers.
 .global pad_open
@@ -197,6 +222,7 @@ msg_pad_at:
     sw zero, VIRTIO_MMIO_QUEUE_NOTIFY(a0)
     call virtio_irq_enable
     call pad_ranges
+    call pad_name_read
     la t0, pad_state
     li t1, 1
     sd t1, 0(t0)
@@ -389,6 +415,38 @@ pad_ranges:
 9:
     ld ra, 24(sp)
     addi sp, sp, 32
+    ret
+
+# pad_name_read: the device's name from the config space, ID_NAME,
+# into pad_name, NUL-terminated, at most JAB_PAD_NAME_BYTES less one;
+# its length kept. Keeps the s registers.
+pad_name_read:
+    la t0, pad_base
+    ld t0, 0(t0)
+    li t4, VIRTIO_INPUT_CFG_ID_NAME
+    sb t4, (VIRTIO_MMIO_CONFIG + VIRTIO_INPUT_CFG_SELECT)(t0)
+    sb zero, (VIRTIO_MMIO_CONFIG + VIRTIO_INPUT_CFG_SUBSEL)(t0)
+    lbu t1, (VIRTIO_MMIO_CONFIG + VIRTIO_INPUT_CFG_SIZE)(t0)
+    li t2, JAB_PAD_NAME_BYTES - 1
+    bleu t1, t2, 1f
+    mv t1, t2
+1:
+    la t2, pad_name
+    li t3, 0
+2:
+    bgeu t3, t1, 3f
+    add t4, t0, t3
+    lbu t5, (VIRTIO_MMIO_CONFIG + VIRTIO_INPUT_CFG_DATA)(t4)
+    beqz t5, 3f                 # the device may end it early
+    add t6, t2, t3
+    sb t5, 0(t6)
+    addi t3, t3, 1
+    j 2b
+3:
+    add t6, t2, t3
+    sb zero, 0(t6)
+    la t0, pad_name_length
+    sd t3, 0(t0)
     ret
 
 # pad_axis_present: a0 is an axis code; a0 becomes 1 when the pad has
@@ -656,6 +714,10 @@ pad_keys:
     .skip 8
 pad_abs_bits:
     .skip 8
+pad_name_length:
+    .skip 8
+pad_name:
+    .skip JAB_PAD_NAME_BYTES
 .balign 4
 pad_raw:
     .skip JAB_PAD_AXIS_COUNT * 4

@@ -75,15 +75,23 @@
 .set JAB_SYS_PAD_INPUT, 33
 .set JAB_SYS_PAD_AXIS, 34
 .set JAB_SYS_DISPLAY_TEXT, 35
+.set JAB_SYS_PAD_NAME, 36
 
 # Text drawn where a program says, with the console's font: a cell is
-# JAB_TEXT_WIDTH by JAB_TEXT_HEIGHT pixels; JAB_TEXT_PLAIN is the
-# console's white, and JAB_TEXT_BOLD in the style strikes each glyph
-# twice a pixel apart.
+# JAB_TEXT_WIDTH by JAB_TEXT_HEIGHT pixels at JAB_TEXT_SCALE_ONE, the
+# scale in 256ths as a sprite's, at most JAB_TEXT_SCALE_MAX;
+# JAB_TEXT_PLAIN is the console's white, and JAB_TEXT_BOLD in the
+# style strikes each glyph twice a pixel apart.
 .set JAB_TEXT_WIDTH, 12
 .set JAB_TEXT_HEIGHT, 24
+.set JAB_TEXT_SCALE_ONE, 256
+.set JAB_TEXT_SCALE_MAX, 65536
 .set JAB_TEXT_PLAIN, 0x00ffffff
 .set JAB_TEXT_BOLD, 1
+
+# The pad's name as the device reports it, at most JAB_PAD_NAME_BYTES
+# with its terminator
+.set JAB_PAD_NAME_BYTES, 128
 
 # The pad: a gamepad the host passed through as a virtio-input device.
 # jab.pad.read fills a state record of JAB_PAD_ENTRY bytes, on a 4-byte
@@ -409,18 +417,26 @@
     ecall
 .endm
 
-# jab.display.text message, x, y, color, style: draw a NUL-terminated
-# string, a label inside the program, into the framebuffer with the
-# console's font, its top left at x, y, which may be negative or past
-# the screen with what falls off clipped, in the colour, 0x00RRGGBB,
-# JAB_TEXT_PLAIN when left out; the style JAB_TEXT_BOLD strikes each
-# glyph twice a pixel apart, 0 when left out. Only the glyphs' own
-# pixels are drawn, so what is under the text stays; a program clears
-# the strip first when it wants a clean line. Nothing is presented:
-# the program flips the rectangle, whole or with the rest. x, y,
-# color, and style are registers. a0 becomes the width drawn in pixels
-# and a1 the height, JAB_TEXT_HEIGHT.
-.macro jab.display.text message, x, y, color, style
+# jab.display.text message, x, y, color, style, scale: draw a
+# NUL-terminated string, a label inside the program, into the
+# framebuffer with the console's font, its top left at x, y, which may
+# be negative or past the screen with what falls off clipped, in the
+# colour, 0x00RRGGBB, JAB_TEXT_PLAIN when left out; the style
+# JAB_TEXT_BOLD strikes each glyph twice a pixel apart, 0 when left
+# out; the scale in 256ths sizes each cell from JAB_TEXT_WIDTH by
+# JAB_TEXT_HEIGHT, JAB_TEXT_SCALE_ONE when left out, sampling the
+# nearest source pixel as a sprite does. Only the glyphs' own pixels
+# are drawn, so what is under the text stays; a program clears the
+# strip first when it wants a clean line. Nothing is presented: the
+# program flips the rectangle, whole or with the rest. x, y, color,
+# style, and scale are registers. a0 becomes the width drawn in pixels
+# and a1 the height.
+.macro jab.display.text message, x, y, color, style, scale
+    .ifb \scale
+    li a5, JAB_TEXT_SCALE_ONE
+    .else
+    mv a5, \scale
+    .endif
     .ifb \style
     li a4, 0
     .else
@@ -499,6 +515,16 @@
 # everything that arrived. A machine with no pad never has an event.
 .macro jab.pad.input
     li a7, JAB_SYS_PAD_INPUT
+    ecall
+.endm
+
+# jab.pad.name buffer: the pad's name as the device reports it, a
+# NUL-terminated string into the buffer, JAB_PAD_NAME_BYTES long. a0
+# becomes 0 with the name written, or 1 when the machine carries no
+# pad; a1 the name's length.
+.macro jab.pad.name buffer
+    mv a0, \buffer
+    li a7, JAB_SYS_PAD_NAME
     ecall
 .endm
 

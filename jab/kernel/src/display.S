@@ -562,9 +562,10 @@ sys_print:
 # framebuffer with the console's font, its top left at a1, a2, signed,
 # in the colour a3, only the glyphs' own pixels, so what is under the
 # text stays; a4 is the style, JAB_TEXT_BOLD striking each glyph twice
-# a pixel apart. What falls off the screen is clipped. Nothing is
-# presented; the program flips. a0 becomes the width drawn in pixels
-# and a1 the height, the font's.
+# a pixel apart; a5 the scale in 256ths, a cell being the font's size
+# times it, the nearest source pixel taken as a sprite's is. What
+# falls off the screen is clipped. Nothing is presented; the program
+# flips. a0 becomes the width drawn in pixels and a1 the height.
 .global sys_display_text
 sys_display_text:
     call message_bounds
@@ -574,7 +575,20 @@ sys_display_text:
     ld s3, 96(sp)               # y
     ld s4, 104(sp)              # the colour
     ld s5, 112(sp)              # the style
+    ld s7, 120(sp)              # the scale
+    li t0, JAB_TEXT_SCALE_MAX
+    bleu s7, t0, 0f
+    mv s7, t0
+0:
+    li t0, FONT_WIDTH
+    mul s8, t0, s7
+    srli s8, s8, 8              # a cell's width
+    li t0, FONT_HEIGHT
+    mul s9, t0, s7
+    srli s9, s9, 8              # and height
     li s6, 0                    # the width so far
+    beqz s8, 9f
+    beqz s9, 9f
 1:
     bgeu s0, s1, 9f
     lbu a0, 0(s0)
@@ -588,38 +602,61 @@ sys_display_text:
     mv a2, s3
     mv a3, s4
     mv a4, s5
+    mv a5, s8
+    mv a6, s9
     call text_glyph
 2:
-    addi s6, s6, FONT_WIDTH
+    add s6, s6, s8
     j 1b
 9:
+    beqz s6, 10f
     andi t0, s5, JAB_TEXT_BOLD
     beqz t0, 10f
     addi s6, s6, 1
 10:
     sd s6, 80(sp)
-    li t0, FONT_HEIGHT
-    sd t0, 88(sp)
+    sd s9, 88(sp)
     j trap_return
 
 # text_glyph: draw the glyph of a0 with its top left at a1, a2, in the
-# colour a3 with the style a4, the set pixels only, each clipped to the
-# screen.
+# colour a3 with the style a4, in a cell a5 wide and a6 high, the set
+# pixels only, each clipped to the screen; a drawn pixel samples the
+# nearest source pixel.
 text_glyph:
-    addi sp, sp, -16
-    sd ra, 8(sp)
+    addi sp, sp, -48
+    sd ra, 40(sp)
     addi t0, a0, -FONT_FIRST
     li t1, FONT_GLYPH_BYTES
     mul t0, t0, t1
     la t1, font_glyphs
-    add t0, t0, t1              # the glyph's rows
-    li t2, 0                    # the row
+    add t0, t0, t1
+    sd t0, 0(sp)                # the glyph's rows
+    sd a5, 8(sp)                # the cell's width
+    sd a6, 16(sp)               # and height
+    sd zero, 24(sp)             # the drawn row
 1:
-    lhu t3, 0(t0)
+    ld t2, 24(sp)
+    ld t1, 16(sp)
+    bgeu t2, t1, 9f
+    li t3, FONT_HEIGHT
+    mul t3, t3, t2
+    divu t3, t3, t1             # the source row
+    slli t3, t3, 1
+    ld t0, 0(sp)
+    add t3, t3, t0
+    lhu t3, 0(t3)               # its bits
     add a6, a2, t2              # the pixel row
-    li t5, 0                    # the column
+    sd zero, 32(sp)             # the drawn column
 2:
-    srli t6, t3, 15
+    ld t5, 32(sp)
+    ld t1, 8(sp)
+    bgeu t5, t1, 8f
+    li t6, FONT_WIDTH
+    mul t6, t6, t5
+    divu t6, t6, t1             # the source column
+    li t4, 15
+    sub t6, t4, t6
+    srl t6, t3, t6
     andi t6, t6, 1
     beqz t6, 4f
     add a5, a1, t5              # the pixel column
@@ -629,16 +666,18 @@ text_glyph:
     addi a5, a5, 1
     call text_pixel
 4:
-    slli t3, t3, 1
+    ld t5, 32(sp)
     addi t5, t5, 1
-    li t6, FONT_WIDTH
-    bltu t5, t6, 2b
-    addi t0, t0, FONT_ROW_BYTES
+    sd t5, 32(sp)
+    j 2b
+8:
+    ld t2, 24(sp)
     addi t2, t2, 1
-    li t6, FONT_HEIGHT
-    bltu t2, t6, 1b
-    ld ra, 8(sp)
-    addi sp, sp, 16
+    sd t2, 24(sp)
+    j 1b
+9:
+    ld ra, 40(sp)
+    addi sp, sp, 48
     ret
 
 # text_pixel: the colour a3 at column a5, row a6, when that is on the

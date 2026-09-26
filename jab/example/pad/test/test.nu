@@ -1,16 +1,19 @@
 # pad's integration test, through the shim and the API on Linux: the
 # host pushes the left stick full right for most of a second, centres
-# it, presses South, then East, sending the events into a gamepad
-# played from table.nuon, and reads back the records. The drive vector
-# is reported as the stick goes over and comes back, your sphere's
-# velocity grows while it is held and falls after, South stops it,
-# East reports its colour and the screen shows your sphere in it, the
-# ball's first velocity is bounce's, every wall hit's contact point
-# lies on a screen edge, a meeting is reported for both spheres at one
-# point, and the screen agrees: your sphere has moved right. On any
-# other host, where no gamepad can be played, D is held through the
-# API instead, wasd's own test, and neither the stop nor the colour is
-# asked for.
+# it, presses South, then East, then pushes the right stick full
+# right, sending the events into a gamepad played from table.nuon, and
+# reads back the records. The drive vector is reported as the left
+# stick goes over and comes back and as the right stick's high third
+# takes hold at one and a half ACCEL, your sphere's velocity grows
+# while the left stick is held and falls after, South stops it, East
+# reports its colour, the right stick's position paints the sphere the
+# colour its position makes and the screen shows it, East's name sits
+# centred in the strip at the top, the ball's first velocity is
+# bounce's, every wall hit's contact point lies on a screen edge, a
+# meeting is reported for both spheres at one point, and the screen
+# agrees: your sphere has moved right. On any other host, where no
+# gamepad can be played, D is held through the API instead, wasd's own
+# test, and neither the stop nor the colours are asked for.
 use ../../../sdk/nu/jab.nu
 use std/assert
 
@@ -44,8 +47,16 @@ const RELEASED = 0
 # button's colour can be
 const BTN_EAST = 305
 const COLOR_FLOOR = 64
-# The label's off-white, as example/pad/src/main.S sets it
+# The label's off-white and its strip, as example/pad/src/main.S sets
+# them: y 16, a cell 18 wide and 36 high at the label's scale
 const LABEL_COLOR = "ebe6dc"
+const LABEL_Y = 16
+const LABEL_CELL = 18
+const LABEL_HEIGHT = 36
+# The right stick full right: red full, green half, blue full, and the
+# high third's strength, one and a half ACCEL
+const STICK_COLOR = "ff7fff"
+const ACCEL_MAX = 306
 
 def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     let played = ($nu.os-info.name == "linux")
@@ -68,9 +79,11 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     assert (($reports | length) > 0) "pad reported over the API"
     assert equal (($run.api | bytes length) mod $REPORT_SIZE) 0 "whole records only"
 
-    # the drive vector: the stick over, then back
+    # the drive vector: the left stick over, then back, then the right
+    # stick's high third
     let drive = ($reports | where kind == $REPORT_ACCELERATION and sphere == $SPHERE_PLAYER)
-    assert equal ($drive | select x y) [{x: $ACCEL, y: 0}, {x: 0, y: 0}] $"the drive vector as the push comes and goes: ($drive)"
+    let expected_drive = (if $played { [{x: $ACCEL, y: 0}, {x: 0, y: 0}, {x: $ACCEL_MAX, y: 0}] } else { [{x: $ACCEL, y: 0}, {x: 0, y: 0}] })
+    assert equal ($drive | select x y) $expected_drive $"the drive vector as the pushes come and go: ($drive)"
 
     # your velocity: grows while pushed, never past the top speed, and
     # is smaller at the end than at its peak
@@ -80,7 +93,8 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     assert ($peak > $ACCEL * 10 and $peak <= $TOP_SPEED) $"a peak speed from most of a second of push: ($peak)"
     assert (($mine | last | get x) < $peak) $"and slowing once the push is off: ($mine | last | get x)"
     if $played {
-        assert equal ($mine | last | select x y) {x: 0, y: 0} $"South stopped your sphere: ($mine | last)"
+        assert (($mine | any {|v| $v.x == 0 and $v.y == 0 })) $"South stopped your sphere at some point: ($mine | last 3)"
+        assert (($mine | last | get x) > 0) $"and the right stick set it going again: ($mine | last)"
     }
 
     # East's colour: reported once, every channel from the floor up
@@ -91,7 +105,8 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
         for channel in [($c bit-shr 16), (($c bit-shr 8) bit-and 0xff), ($c bit-and 0xff)] {
             assert ($channel >= $COLOR_FLOOR and $channel <= 255) $"a channel of the colour is from the floor up: ($c)"
         }
-        $c | format number | get lowerhex | str replace "0x" "" | fill --alignment right --character "0" --width 6
+        # then the right stick's position painted over it
+        $STICK_COLOR
     } else {
         assert equal $colors [] "no colour without a pad"
         "ff5533"
@@ -117,11 +132,14 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     assert ($player.count > 24900 and $player.count < 26000) $"your sphere, a disc of radius 90 in ($player_color), has about 25447 pixels, not ($player.count)"
     if $played {
         assert equal (jab ink $screen "ff5533" | get count) 0 "and none of its first colour is left"
-        # East's name at the top of the screen, bold off-white, four
-        # glyphs wide at most and one line tall, inside the strip
+        # East's name at the top of the screen, bold off-white at the
+        # label's scale, four cells wide at most, centred in the strip
         let label = (jab ink $screen $LABEL_COLOR)
-        assert ($label.count > 100) $"the button's name is on the screen: ($label.count) off-white pixels"
-        assert ($label.left >= 16 and $label.right < 16 + 4 * 12 + 1 and $label.top >= 16 and $label.bottom < 16 + 24) $"and inside the label's strip: ($label)"
+        assert ($label.count > 200) $"the button's name is on the screen: ($label.count) off-white pixels"
+        assert ($label.top >= $LABEL_Y and $label.bottom < $LABEL_Y + $LABEL_HEIGHT) $"inside the label's strip: ($label)"
+        assert (($label.right - $label.left + 1) <= 4 * $LABEL_CELL + 1) $"four cells wide at most: ($label)"
+        let middle = (($label.left + $label.right) // 2)
+        assert ($middle > 960 - $LABEL_CELL and $middle < 960 + $LABEL_CELL) $"and centred: ($label)"
     }
     let centre_x = (($player.left + $player.right) // 2)
     let centre_y = (($player.top + $player.bottom) // 2)

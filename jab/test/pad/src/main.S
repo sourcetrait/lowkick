@@ -1,18 +1,29 @@
-# pad: the kernel's pad driver under test. Prints the pad's own range
-# for X, GAS, and HAT0X and for an axis this pad lacks, then reports
+# pad: the kernel's pad driver under test. Prints the pad's name as
+# the device reports it, its own range for X, GAS, and HAT0X and for
+# an axis this pad lacks, then reports
 # every pad event as `pad <type> <code> <value>` and, after each, the
 # state as `state <keys> <x> <y> <hat0x> <gas>`, the keys as a mask and
 # the axes normalised, until BTN_SOUTH is released. With no pad on the
 # machine it says so and exits.
 .include "jab.inc"
 
-.set LINE_BYTES, 96
+.set LINE_BYTES, 160
 .set DIGITS_BYTES, 24
 
 .section .text
 .global _start
 _start:
     jab.uart.print msg_ready
+    la t0, name_buffer
+    jab.pad.name t0
+    bnez a0, 1f
+    call line_begin
+    la a0, msg_name
+    call line_str
+    la a0, name_buffer
+    call line_str
+    call line_end
+1:
     li s0, JAB_ABS_X
     call print_axis
     li s0, JAB_ABS_GAS
@@ -237,6 +248,8 @@ axis_record:
     .skip JAB_PAD_AXIS_ENTRY
 state_record:
     .skip JAB_PAD_ENTRY
+name_buffer:
+    .skip JAB_PAD_NAME_BYTES
 quit:
     .skip 1
 
@@ -245,6 +258,8 @@ msg_ready:
     .asciz "pad: ready\n"
 msg_no_pad:
     .asciz "pad: no pad\n"
+msg_name:
+    .asciz "name "
 msg_axis:
     .asciz "axis "
 msg_none:
