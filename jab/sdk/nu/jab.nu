@@ -486,7 +486,11 @@ def "main watch" [ws: path] {
 # as recorded, the stretch reported on (the first `--skip` seconds
 # dropped as the load), and per thread the steady CPU seconds a second
 # over that stretch and the peak second, with the process total;
-# threads under 0.005 a second are left out.
+# threads under 0.005 a second are left out. On macOS a thread is its
+# row, and QEMU's worker threads come and go, so a row can change
+# identity between samples: a row whose second-by-second rate is
+# impossible for one thread, negative or past one, is reported with
+# `stable: false` and no peak, its steady figure a mix.
 def "main watched" [ws: path, --skip: float = 5.0] {
     let file = (watch-file $ws)
     if not ($file | path exists) { error make {msg: $"nothing recorded at ($file); run `just watch` during a run first"} }
@@ -504,8 +508,9 @@ def "main watched" [ws: path, --skip: float = 5.0] {
         } | compact)
         if ($series | length) < 2 { null } else {
             let steady = ((($series | last).cpu - ($series | first).cpu) / (($series | last).at - ($series | first).at))
-            let peak = ($series | window 2 | each {|w| ($w.1.cpu - $w.0.cpu) / ($w.1.at - $w.0.at) } | math max)
-            { name: ($series | last).name, id: $id, steady: ($steady | math round -p 3), peak: ($peak | math round -p 3) }
+            let rates = ($series | window 2 | each {|w| ($w.1.cpu - $w.0.cpu) / ($w.1.at - $w.0.at) })
+            let stable = (not ($rates | any {|r| $r < -0.001 or $r > 1.05 }))
+            { name: ($series | last).name, id: $id, steady: ($steady | math round -p 3), peak: (if $stable { $rates | math max | math round -p 3 } else { null }), stable: $stable }
         }
     } | compact | where steady >= 0.005 | sort-by steady --reverse)
     let report = {

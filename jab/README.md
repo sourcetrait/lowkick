@@ -77,7 +77,10 @@ names, the first row is the thread that draws the window and the rest
 are numbered. `just watched` then prints one NUON record on the
 recording, the run as it was (host, QEMU, window, the symbols the
 kernel was built with) and per thread the steady CPU seconds a second
-after the first five, which `--skip` changes, ready to paste.
+after the first five, which `--skip` changes, ready to paste. On
+macOS a thread is its row, and QEMU's worker threads come and go, so
+a row that changed identity during the recording is reported with
+`stable: false` and no peak.
 
 `just probe sdl example walk` looks at the window itself: it runs the
 program under SDL with OpenGL for twelve seconds (`--seconds N`) with a
