@@ -846,15 +846,16 @@ def gamepad-args [ws: oneof<string, nothing>]: nothing -> list<string> {
 }
 
 # The jabdisco binary, built with cargo from the disco workspace beside
-# the jab workspace into .target/disco on first use and whenever it
-# changes: its path.
+# the jab workspace into that workspace's own target/ on first use and
+# whenever it changes, so a `cargo build --release` there is the same
+# build: its path.
 def disco-build [ws: path]: nothing -> string {
-    let manifest = ($ws | path dirname | path join "disco" "Cargo.toml")
-    if not ($manifest | path exists) { error make {msg: $"no disco workspace beside this one at ($manifest | path dirname); JAB_PAD names a pad's evdev path outright, and --no-pad leaves the pad off"} }
-    let target = ($ws | path join ".target" "disco")
-    let built = (^cargo build --release --quiet --manifest-path $manifest -p jabdisco_cli --target-dir $target | complete)
+    let disco = ($ws | path dirname | path join "disco")
+    let manifest = ($disco | path join "Cargo.toml")
+    if not ($manifest | path exists) { error make {msg: $"no disco workspace beside this one at ($disco); JAB_PAD names a pad's evdev path outright, and --no-pad leaves the pad off"} }
+    let built = (^cargo build --release --quiet --manifest-path $manifest -p jabdisco_cli | complete)
     if $built.exit_code != 0 { error make {msg: $"building jabdisco failed:\n($built.stderr)"} }
-    $target | path join "release" "jabdisco"
+    $disco | path join "target" "release" "jabdisco"
 }
 
 # Run a program with the console window, the UART on stdio; QEMU's exit

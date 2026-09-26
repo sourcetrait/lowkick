@@ -99,8 +99,8 @@ tick. Linux only, since it preloads into QEMU; with no display server
 SDL runs its offscreen driver, drawing nothing along the same path.
 
 A gamepad on the host reaches a program as a device: on Linux a run
-finds it through `jabdisco`, built with cargo from `../disco` on first
-use, and passes it through as `virtio-input-host-device`, QEMU holding
+finds it through `jabdisco`, built with cargo into `../disco/target`
+on first use, and passes it through as `virtio-input-host-device`, QEMU holding
 it for the run; `JAB_PAD=/dev/input/eventN` names one outright, and
 `--no-pad` leaves it off. A program reads it with `jab.pad.read`, the
 keys as a mask and every axis by its evdev code normalised to signed
