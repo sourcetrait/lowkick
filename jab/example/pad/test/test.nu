@@ -1,14 +1,16 @@
 # pad's integration test, through the shim and the API on Linux: the
 # host pushes the left stick full right for most of a second, centres
-# it, and presses South, sending the events into a gamepad played from
-# table.nuon, and reads back the records. The drive vector is reported
-# as the stick goes over and comes back, your sphere's velocity grows
-# while it is held and falls after, South stops it, the ball's first
-# velocity is bounce's, every wall hit's contact point lies on a screen
-# edge, a meeting is reported for both spheres at one point, and the
-# screen agrees: your sphere has moved right. On any other host,
-# where no gamepad can be played, D is held through the API instead,
-# wasd's own test, and the stop is not asked for.
+# it, presses South, then East, sending the events into a gamepad
+# played from table.nuon, and reads back the records. The drive vector
+# is reported as the stick goes over and comes back, your sphere's
+# velocity grows while it is held and falls after, South stops it,
+# East reports its colour and the screen shows your sphere in it, the
+# ball's first velocity is bounce's, every wall hit's contact point
+# lies on a screen edge, a meeting is reported for both spheres at one
+# point, and the screen agrees: your sphere has moved right. On any
+# other host, where no gamepad can be played, D is held through the
+# API instead, wasd's own test, and neither the stop nor the colour is
+# asked for.
 use ../../../sdk/nu/jab.nu
 use std/assert
 
@@ -18,6 +20,7 @@ const REPORT_SIZE = 12
 const REPORT_VELOCITY = 1
 const REPORT_ACCELERATION = 2
 const REPORT_HIT = 3
+const REPORT_COLOR = 4
 const SPHERE_PLAYER = 1
 const SPHERE_BALL = 2
 const AGAINST_WALL = 0
@@ -37,6 +40,12 @@ const WALL_BOTTOM = 276224
 const KEY_D = 32
 const PRESSED = 1
 const RELEASED = 0
+# evdev's East, as sdk/jab_pad.inc, and the least any channel of a
+# button's colour can be
+const BTN_EAST = 305
+const COLOR_FLOOR = 64
+# The label's off-white, as example/pad/src/main.S sets it
+const LABEL_COLOR = "ebe6dc"
 
 def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     let played = ($nu.os-info.name == "linux")
@@ -74,6 +83,20 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
         assert equal ($mine | last | select x y) {x: 0, y: 0} $"South stopped your sphere: ($mine | last)"
     }
 
+    # East's colour: reported once, every channel from the floor up
+    let colors = ($reports | where kind == $REPORT_COLOR)
+    let player_color = (if $played {
+        assert equal ($colors | get y) [$BTN_EAST] $"East's press was reported as a colour, once: ($colors)"
+        let c = ($colors | first | get x)
+        for channel in [($c bit-shr 16), (($c bit-shr 8) bit-and 0xff), ($c bit-and 0xff)] {
+            assert ($channel >= $COLOR_FLOOR and $channel <= 255) $"a channel of the colour is from the floor up: ($c)"
+        }
+        $c | format number | get lowerhex | str replace "0x" "" | fill --alignment right --character "0" --width 6
+    } else {
+        assert equal $colors [] "no colour without a pad"
+        "ff5533"
+    })
+
     # the ball: bounce's speed first, and every wall hit on an edge
     let ball = ($reports | where kind == $REPORT_VELOCITY and sphere == $SPHERE_BALL)
     assert equal ($ball | first | select x y) {x: $BALL_VX, y: $BALL_VY} "the ball starts at bounce's speed"
@@ -90,8 +113,16 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
 
     # the screen agrees
     let screen = (jab screen $run.screen)
-    let player = (jab ink $screen "ff5533")
-    assert ($player.count > 24900 and $player.count < 26000) $"your sphere, a disc of radius 90, has about 25447 pixels, not ($player.count)"
+    let player = (jab ink $screen $player_color)
+    assert ($player.count > 24900 and $player.count < 26000) $"your sphere, a disc of radius 90 in ($player_color), has about 25447 pixels, not ($player.count)"
+    if $played {
+        assert equal (jab ink $screen "ff5533" | get count) 0 "and none of its first colour is left"
+        # East's name at the top of the screen, bold off-white, four
+        # glyphs wide at most and one line tall, inside the strip
+        let label = (jab ink $screen $LABEL_COLOR)
+        assert ($label.count > 100) $"the button's name is on the screen: ($label.count) off-white pixels"
+        assert ($label.left >= 16 and $label.right < 16 + 4 * 12 + 1 and $label.top >= 16 and $label.bottom < 16 + 24) $"and inside the label's strip: ($label)"
+    }
     let centre_x = (($player.left + $player.right) // 2)
     let centre_y = (($player.top + $player.bottom) // 2)
     assert ($centre_x > 1160) $"your sphere has moved right from the centre: ($centre_x)"
@@ -102,7 +133,7 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     }
     let disc = (jab ink $screen "8f00ff")
     assert ($disc.count > 24900 and $disc.count < 26000) $"the other sphere is whole on the screen, since the two never overlap: ($disc.count) pixels"
-    print $"pad: ($reports | length) records, yours at ($centre_x),($centre_y) peaking at ($peak), ($wall_hits | length) wall hits, ($yours | length) meetings; QEMU used ($run.cpu_seconds) CPU seconds over ($run.wall_seconds | math round -p 2) seconds"
+    print $"pad: ($reports | length) records, yours at ($centre_x),($centre_y) in ($player_color) peaking at ($peak), ($wall_hits | length) wall hits, ($yours | length) meetings; QEMU used ($run.cpu_seconds) CPU seconds over ($run.wall_seconds | math round -p 2) seconds"
     assert ($run.cpu_seconds < ($run.wall_seconds * 0.5)) "the hart halts between frames"
     print "pad: ok"
 }

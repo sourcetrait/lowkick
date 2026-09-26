@@ -558,6 +558,108 @@ sys_print:
     bnez t0, sys_display_print
     j sys_uart_print
 
+# sys_display_text (jab.display.text): draw the string at a0 into the
+# framebuffer with the console's font, its top left at a1, a2, signed,
+# in the colour a3, only the glyphs' own pixels, so what is under the
+# text stays; a4 is the style, JAB_TEXT_BOLD striking each glyph twice
+# a pixel apart. What falls off the screen is clipped. Nothing is
+# presented; the program flips. a0 becomes the width drawn in pixels
+# and a1 the height, the font's.
+.global sys_display_text
+sys_display_text:
+    call message_bounds
+    mv s0, a0                   # the byte
+    mv s1, a1                   # the window's end
+    ld s2, 88(sp)               # x
+    ld s3, 96(sp)               # y
+    ld s4, 104(sp)              # the colour
+    ld s5, 112(sp)              # the style
+    li s6, 0                    # the width so far
+1:
+    bgeu s0, s1, 9f
+    lbu a0, 0(s0)
+    beqz a0, 9f
+    addi s0, s0, 1
+    li t0, FONT_FIRST
+    bltu a0, t0, 2f
+    li t0, FONT_LAST
+    bgtu a0, t0, 2f
+    add a1, s2, s6
+    mv a2, s3
+    mv a3, s4
+    mv a4, s5
+    call text_glyph
+2:
+    addi s6, s6, FONT_WIDTH
+    j 1b
+9:
+    andi t0, s5, JAB_TEXT_BOLD
+    beqz t0, 10f
+    addi s6, s6, 1
+10:
+    sd s6, 80(sp)
+    li t0, FONT_HEIGHT
+    sd t0, 88(sp)
+    j trap_return
+
+# text_glyph: draw the glyph of a0 with its top left at a1, a2, in the
+# colour a3 with the style a4, the set pixels only, each clipped to the
+# screen.
+text_glyph:
+    addi sp, sp, -16
+    sd ra, 8(sp)
+    addi t0, a0, -FONT_FIRST
+    li t1, FONT_GLYPH_BYTES
+    mul t0, t0, t1
+    la t1, font_glyphs
+    add t0, t0, t1              # the glyph's rows
+    li t2, 0                    # the row
+1:
+    lhu t3, 0(t0)
+    add a6, a2, t2              # the pixel row
+    li t5, 0                    # the column
+2:
+    srli t6, t3, 15
+    andi t6, t6, 1
+    beqz t6, 4f
+    add a5, a1, t5              # the pixel column
+    call text_pixel
+    andi t6, a4, JAB_TEXT_BOLD
+    beqz t6, 4f
+    addi a5, a5, 1
+    call text_pixel
+4:
+    slli t3, t3, 1
+    addi t5, t5, 1
+    li t6, FONT_WIDTH
+    bltu t5, t6, 2b
+    addi t0, t0, FONT_ROW_BYTES
+    addi t2, t2, 1
+    li t6, FONT_HEIGHT
+    bltu t2, t6, 1b
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# text_pixel: the colour a3 at column a5, row a6, when that is on the
+# screen. Clobbers t1 and a7 only.
+text_pixel:
+    bltz a5, 1f
+    bltz a6, 1f
+    li a7, JAB_DISPLAY_WIDTH
+    bgeu a5, a7, 1f
+    li a7, JAB_DISPLAY_HEIGHT
+    bgeu a6, a7, 1f
+    li a7, JAB_DISPLAY_PITCH
+    mul a7, a7, a6
+    slli t1, a5, 2
+    add a7, a7, t1
+    li t1, JAB_DISPLAY_BASE
+    add a7, a7, t1
+    sw a3, 0(a7)
+1:
+    ret
+
 # display_open: bring the GPU up and show the framebuffer. Returns 0; 1
 # when no virtio-gpu is on the machine; 2 when the device refuses the
 # features or has no control queue of VIRTQ_SIZE; 3 when a command

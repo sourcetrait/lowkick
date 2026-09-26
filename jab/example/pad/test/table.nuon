@@ -1,9 +1,12 @@
 # pad's table: the left stick full right for most of a second, then
-# centred, then South pressed and released, which stops your sphere.
+# centred, then South pressed and released, which stops your sphere,
+# then East, which paints it East's colour.
 [
     [at, type, code, value];
     [1000ms, 3, 0, 255],
     [1800ms, 3, 0, 127],
     [2500ms, 1, 304, 1],
     [2600ms, 1, 304, 0],
+    [2900ms, 1, 305, 1],
+    [3000ms, 1, 305, 0],
 ]

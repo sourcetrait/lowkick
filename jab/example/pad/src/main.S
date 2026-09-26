@@ -4,11 +4,17 @@
 # the longer it is held, up to three times the bouncing sphere's speed;
 # the dpad pushes at full strength along its eight directions; South
 # (A on the reference pad) stops it at once, as the space bar does; W,
-# A, S, D, and the space bar still work. With no push it slows to a
-# stop; the walls bounce it back at the speed it hit them, and so does
-# the other sphere. The other sphere starts somewhere and bounces off
-# the walls as in bounce, and off your sphere too. The two never
-# overlap. Positions and speeds carry FIX fractional bits.
+# A, S, D, and the space bar still work. Every other button of the
+# pad is given a colour of its own at startup, drawn at random, and
+# pressing it paints your sphere that colour. South and the colour
+# buttons announce themselves too: the button's evdev name, NORTH and
+# the rest, in bold off-white at the top of the screen; the stick and
+# the dpad show themselves by moving the sphere and say nothing. With
+# no push it slows to a stop; the walls bounce it back at the speed it
+# hit them, and so does the other sphere. The other sphere starts
+# somewhere and bounces off the walls as in bounce, and off your
+# sphere too. The two never overlap. Positions and speeds carry FIX
+# fractional bits.
 #
 # The pad is read as a state each tick: the stick's two axes come
 # normalised to -JAB_PAD_FULL through JAB_PAD_FULL, 0 at rest, and the
@@ -25,8 +31,10 @@
 # changes, an acceleration record when the drive vector changes, from
 # the keys, the stick, and the hat together, and a hit record per
 # sphere per collision with the contact point, a wall or the other
-# sphere. Values are the program's own fixed point. With no API port on
-# the machine (`just run example pad` without `--api`) the reads find
+# sphere; and one of this example's own, a colour record when a button
+# paints your sphere, its x the colour and its y the button's code.
+# Values are the program's own fixed point. With no API port on the
+# machine (`just run example pad` without `--api`) the reads find
 # nothing and the writes are refused.
 .include "jab.inc"
 
@@ -72,18 +80,45 @@
 .set REPORT_VELOCITY, 1
 .set REPORT_ACCELERATION, 2
 .set REPORT_HIT, 3
+.set REPORT_COLOR, 4
 .set SPHERE_PLAYER, 1
 .set SPHERE_BALL, 2
 .set AGAINST_WALL, 0
-# Reports a frame at most: two velocities, an acceleration, and a hit
-# on each axis and with the other sphere for each of the two
-.set REPORT_MAX, 9
+# Reports a frame at most: two velocities, an acceleration, a hit on
+# each axis and with the other sphere for each of the two, and a colour
+.set REPORT_MAX, 10
+# The pad's buttons, one colour each from JAB_BTN_GAMEPAD, drawn with
+# every channel at least COLOR_FLOOR so it shows on black
+.set BUTTONS, 32
+.set COLOR_FLOOR, 64
+.set COLOR_SPAN, 192
+# The button's name at the top of the screen: the strip it is drawn
+# in, cleared before each name, wide enough for the longest and the
+# bold strike, in off-white
+.set LABEL_X, 16
+.set LABEL_Y, 16
+.set LABEL_WIDTH, (6 * JAB_TEXT_WIDTH + 1)
+.set LABEL_HEIGHT, JAB_TEXT_HEIGHT
+.set LABEL_COLOR, 0x00ebe6dc
+.set NAMED_BUTTONS, 16
 
 .section .text
 .global _start
 _start:
     jab.display.open
     bnez a0, no_display
+    # your sphere's colour, and a colour for every button from the
+    # clock's randomness
+    li t0, PLAYER
+    la t1, player_color
+    sw t0, 0(t1)
+    rdtime t0
+    bnez t0, 0f
+    li t0, 1
+0:
+    la t1, rand_state
+    sd t0, 0(t1)
+    call assign_colors
     # your sphere at the centre, still, on the black the framebuffer
     # starts with
     li t0, (JAB_DISPLAY_WIDTH / 2) * ONE
@@ -196,23 +231,101 @@ read_api:
     ret
 
 # read_pad: take every pad event waiting; South pressed stops your
-# sphere, and the rest is read as state each tick.
+# sphere, any other button pressed paints it that button's colour, and
+# the axes are read as state each tick.
 read_pad:
 1:
     jab.pad.input
     beqz a0, 9f
     li t0, JAB_EV_KEY
     bne a0, t0, 1b
-    li t0, JAB_BTN_SOUTH
-    bne a1, t0, 1b
     li t0, JAB_KEY_PRESSED
     bne a2, t0, 1b
+    addi t0, a1, -JAB_BTN_GAMEPAD
+    li t1, BUTTONS
+    bgeu t0, t1, 1b
+    # the button announces itself
+    la t1, label_code
+    sd a1, 0(t1)
+    la t1, label_changed
+    li t2, 1
+    sb t2, 0(t1)
+    li t1, JAB_BTN_SOUTH
+    bne a1, t1, 2f
     la t0, player_vx
     sd zero, 0(t0)
     la t0, player_vy
     sd zero, 0(t0)
     j 1b
+2:
+    slli t0, t0, 2
+    la t1, button_colors
+    add t1, t1, t0
+    lwu t0, 0(t1)
+    la t1, player_color
+    sw t0, 0(t1)
+    la t1, color_code
+    sd a1, 0(t1)
+    la t1, color_changed
+    li t0, 1
+    sb t0, 0(t1)
+    j 1b
 9:
+    ret
+
+# assign_colors: a colour for every button, at random.
+assign_colors:
+    addi sp, sp, -16
+    sd ra, 8(sp)
+    la s1, button_colors
+    li s2, BUTTONS
+1:
+    call random_color
+    sw a0, 0(s1)
+    addi s1, s1, 4
+    addi s2, s2, -1
+    bnez s2, 1b
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# random_color: a0 becomes a colour, 0x00RRGGBB, each channel from
+# COLOR_FLOOR up so it shows on black.
+random_color:
+    addi sp, sp, -16
+    sd ra, 8(sp)
+    call random
+    li t0, COLOR_SPAN
+    remu t1, a0, t0
+    addi t1, t1, COLOR_FLOOR
+    slli s3, t1, 16
+    call random
+    li t0, COLOR_SPAN
+    remu t1, a0, t0
+    addi t1, t1, COLOR_FLOOR
+    slli t1, t1, 8
+    or s3, s3, t1
+    call random
+    li t0, COLOR_SPAN
+    remu t1, a0, t0
+    addi t1, t1, COLOR_FLOOR
+    or a0, s3, t1
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# random: a0 becomes the next value of an xorshift over rand_state.
+random:
+    la t0, rand_state
+    ld t1, 0(t0)
+    slli t2, t1, 13
+    xor t1, t1, t2
+    srli t2, t1, 7
+    xor t1, t1, t2
+    slli t2, t1, 17
+    xor t1, t1, t2
+    sd t1, 0(t0)
+    mv a0, t1
     ret
 
 # apply_key: a0 is a key's code and a1 its value. W, A, S, D set and
@@ -756,6 +869,20 @@ report:
     li a2, AGAINST_WALL
     call append_report
 10:
+    # a button's colour, once
+    la t0, color_changed
+    lbu t1, 0(t0)
+    beqz t1, 14f
+    sb zero, 0(t0)
+    la t0, player_color
+    lwu a3, 0(t0)
+    la t0, color_code
+    ld a4, 0(t0)
+    li a0, REPORT_COLOR
+    li a1, SPHERE_PLAYER
+    li a2, AGAINST_WALL
+    call append_report
+14:
     # a meeting: one record for each, with the same point
     la t0, met
     lbu t0, 0(t0)
@@ -877,7 +1004,8 @@ render:
     la t0, player_y
     ld a1, 0(t0)
     srai a1, a1, FIX
-    li a2, PLAYER
+    la t0, player_color
+    lwu a2, 0(t0)
     call draw_disc
     # the rectangle: the least and greatest centres, less and plus the
     # radius
@@ -915,10 +1043,91 @@ render:
     sub a3, a3, a1
     mv a0, s2
     mv a2, s3
+    # a button to announce: its name into the strip, and both
+    # rectangles flipped as one
+    la t0, label_changed
+    lbu t1, 0(t0)
+    beqz t1, 5f
+    sb zero, 0(t0)
+    la t0, rects
+    sw a0, JAB_RECT_X(t0)
+    sw a1, JAB_RECT_Y(t0)
+    sw a2, JAB_RECT_WIDTH(t0)
+    sw a3, JAB_RECT_HEIGHT(t0)
+    li t1, LABEL_X
+    sw t1, (JAB_RECT_SIZE + JAB_RECT_X)(t0)
+    li t1, LABEL_Y
+    sw t1, (JAB_RECT_SIZE + JAB_RECT_Y)(t0)
+    li t1, LABEL_WIDTH
+    sw t1, (JAB_RECT_SIZE + JAB_RECT_WIDTH)(t0)
+    li t1, LABEL_HEIGHT
+    sw t1, (JAB_RECT_SIZE + JAB_RECT_HEIGHT)(t0)
+    call draw_label
+    la t0, rects
+    li t1, 2
+    jab.display.flip.rects t0, t1
+    j 6f
+5:
     jab.display.flip.rect
+6:
     call remember
     ld ra, 8(sp)
     addi sp, sp, 16
+    ret
+
+# draw_label: the strip cleared, then the last announced button's
+# name in it, bold off-white; a button with no name leaves it clear.
+draw_label:
+    addi sp, sp, -16
+    sd ra, 8(sp)
+    li a0, LABEL_X
+    li a1, LABEL_Y
+    li a2, LABEL_WIDTH
+    li a3, LABEL_HEIGHT
+    li a4, BACKGROUND
+    call fill_rect
+    la t0, label_code
+    ld t0, 0(t0)
+    addi t0, t0, -JAB_BTN_GAMEPAD
+    li t1, NAMED_BUTTONS
+    bltu t0, t1, 1f
+    li t0, NAMED_BUTTONS - 1
+1:
+    slli t0, t0, 3
+    la t1, button_names
+    add t1, t1, t0
+    ld a0, 0(t1)
+    li a1, LABEL_X
+    li a2, LABEL_Y
+    li a3, LABEL_COLOR
+    li a4, JAB_TEXT_BOLD
+    li a7, JAB_SYS_DISPLAY_TEXT
+    ecall
+    ld ra, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# fill_rect: the rectangle at a0, a1 of a2 by a3 in the colour a4.
+fill_rect:
+    li t0, JAB_DISPLAY_PITCH
+    mul t0, t0, a1
+    slli t1, a0, 2
+    add t0, t0, t1
+    li t1, JAB_DISPLAY_BASE
+    add t0, t0, t1              # the row's first pixel
+    mv t2, a3
+1:
+    mv t3, t0
+    mv t4, a2
+2:
+    sw a4, 0(t3)
+    addi t3, t3, 4
+    addi t4, t4, -1
+    bnez t4, 2b
+    li t1, JAB_DISPLAY_PITCH
+    add t0, t0, t1
+    addi t2, t2, -1
+    bnez t2, 1b
     ret
 
 # least_greatest: a0 becomes the least of a0, t1, t2, t3 and a2 the
@@ -1071,6 +1280,12 @@ report_count:
     .skip 8
 cmd_pending:
     .skip 8
+rand_state:
+    .skip 8
+color_code:
+    .skip 8
+label_code:
+    .skip 8
 report_buffer:
     .skip REPORT_MAX * REPORT_SIZE
 cmd_read:
@@ -1080,6 +1295,16 @@ cmd_partial:
 .balign 4
 pad_state:
     .skip JAB_PAD_ENTRY
+button_colors:
+    .skip BUTTONS * 4
+player_color:
+    .skip 4
+rects:
+    .skip 2 * JAB_RECT_SIZE
+color_changed:
+    .skip 1
+label_changed:
+    .skip 1
 held_w:
     .skip 1
 held_a:
@@ -1102,3 +1327,42 @@ met:
 .section .rodata
 msg_no_display:
     .asciz "pad: no display\n"
+# The buttons' names, evdev's, from JAB_BTN_GAMEPAD; the last is for a
+# button with none
+name_south:
+    .asciz "SOUTH"
+name_east:
+    .asciz "EAST"
+name_c:
+    .asciz "C"
+name_north:
+    .asciz "NORTH"
+name_west:
+    .asciz "WEST"
+name_z:
+    .asciz "Z"
+name_tl:
+    .asciz "TL"
+name_tr:
+    .asciz "TR"
+name_tl2:
+    .asciz "TL2"
+name_tr2:
+    .asciz "TR2"
+name_select:
+    .asciz "SELECT"
+name_start:
+    .asciz "START"
+name_mode:
+    .asciz "MODE"
+name_thumbl:
+    .asciz "THUMBL"
+name_thumbr:
+    .asciz "THUMBR"
+name_none:
+    .asciz ""
+.balign 8
+button_names:
+    .quad name_south, name_east, name_c, name_north, name_west, name_z
+    .quad name_tl, name_tr, name_tl2, name_tr2, name_select, name_start
+    .quad name_mode, name_thumbl, name_thumbr, name_none

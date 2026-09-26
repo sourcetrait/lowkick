@@ -106,7 +106,10 @@ it for the run; `JAB_PAD=/dev/input/eventN` names one outright, and
 keys as a mask and every axis by its evdev code normalised to signed
 16 bits, `jab.pad.input` for the events as evdev sends them, and
 `jab.pad.axis` for an axis's own range; `example/pad` is wasd on the
-left stick, the dpad, and South. The keyboard and the tablet come off
+left stick, the dpad, and South, every other button painting the
+sphere a colour of its own and naming itself at the top of the screen
+through `jab.display.text`, which draws a string anywhere in the
+framebuffer with the console's font. The keyboard and the tablet come off
 the line with `--no-kbm`. QEMU's `virt` has eight virtio transports and
 the full line uses them all with a pad and the serial device, so a
 pad run with `--set debug` or `--api` needs `--no-kbm`; the tool

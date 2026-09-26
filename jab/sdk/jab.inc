@@ -74,6 +74,16 @@
 .set JAB_SYS_PAD_READ, 32
 .set JAB_SYS_PAD_INPUT, 33
 .set JAB_SYS_PAD_AXIS, 34
+.set JAB_SYS_DISPLAY_TEXT, 35
+
+# Text drawn where a program says, with the console's font: a cell is
+# JAB_TEXT_WIDTH by JAB_TEXT_HEIGHT pixels; JAB_TEXT_PLAIN is the
+# console's white, and JAB_TEXT_BOLD in the style strikes each glyph
+# twice a pixel apart.
+.set JAB_TEXT_WIDTH, 12
+.set JAB_TEXT_HEIGHT, 24
+.set JAB_TEXT_PLAIN, 0x00ffffff
+.set JAB_TEXT_BOLD, 1
 
 # The pad: a gamepad the host passed through as a virtio-input device.
 # jab.pad.read fills a state record of JAB_PAD_ENTRY bytes, on a 4-byte
@@ -396,6 +406,35 @@
 .macro jab.display.print message
     la a0, \message
     li a7, JAB_SYS_DISPLAY_PRINT
+    ecall
+.endm
+
+# jab.display.text message, x, y, color, style: draw a NUL-terminated
+# string, a label inside the program, into the framebuffer with the
+# console's font, its top left at x, y, which may be negative or past
+# the screen with what falls off clipped, in the colour, 0x00RRGGBB,
+# JAB_TEXT_PLAIN when left out; the style JAB_TEXT_BOLD strikes each
+# glyph twice a pixel apart, 0 when left out. Only the glyphs' own
+# pixels are drawn, so what is under the text stays; a program clears
+# the strip first when it wants a clean line. Nothing is presented:
+# the program flips the rectangle, whole or with the rest. x, y,
+# color, and style are registers. a0 becomes the width drawn in pixels
+# and a1 the height, JAB_TEXT_HEIGHT.
+.macro jab.display.text message, x, y, color, style
+    .ifb \style
+    li a4, 0
+    .else
+    mv a4, \style
+    .endif
+    .ifb \color
+    li a3, JAB_TEXT_PLAIN
+    .else
+    mv a3, \color
+    .endif
+    mv a2, \y
+    mv a1, \x
+    la a0, \message
+    li a7, JAB_SYS_DISPLAY_TEXT
     ecall
 .endm
 
