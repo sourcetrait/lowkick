@@ -7,9 +7,6 @@
 //! launcher what is there.
 
 use gilrs::{Gilrs, MappingSource};
-use nu_protocol::engine::EngineState;
-use nu_protocol::{Span, Value, record};
-use nuon::{ToNuonConfig, ToStyle};
 
 /// The expected gamepad.
 struct Gamepad {
@@ -24,35 +21,41 @@ struct Gamepad {
 /// Discover, and say what was found as one pretty NUON record:
 /// `{ gamepad: { name, path, vendor, product } }`, or `{ gamepad: null }`.
 pub fn discover() -> String {
-    let span = Span::unknown();
-    let gamepad = match expected_gamepad() {
-        Some(pad) => Value::record(
-            record! {
-                "name" => Value::string(pad.name, span),
-                "path" => optional_string(pad.path, span),
-                "vendor" => optional_int(pad.vendor, span),
-                "product" => optional_int(pad.product, span),
-            },
-            span,
+    match expected_gamepad() {
+        Some(pad) => format!(
+            "{{\n  gamepad: {{\n    name: {},\n    path: {},\n    vendor: {},\n    product: {}\n  }}\n}}",
+            quoted(&pad.name),
+            pad.path.as_deref().map(quoted).unwrap_or_else(|| "null".to_string()),
+            number(pad.vendor),
+            number(pad.product),
         ),
-        None => Value::nothing(span),
-    };
-    let found = Value::record(record! { "gamepad" => gamepad }, span);
-    let config = ToNuonConfig::default().style(ToStyle::Spaces(2)).span(Some(span));
-    nuon::to_nuon(&EngineState::new(), &found, config).unwrap_or_else(|_| "{ gamepad: null }".to_string())
-}
-
-fn optional_string(value: Option<String>, span: Span) -> Value {
-    match value {
-        Some(text) => Value::string(text, span),
-        None => Value::nothing(span),
+        None => "{\n  gamepad: null\n}".to_string(),
     }
 }
 
-fn optional_int(value: Option<u16>, span: Span) -> Value {
+/// A NUON string: double-quoted, with the quote and the backslash
+/// escaped.
+fn quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A NUON number, or null.
+fn number(value: Option<u16>) -> String {
     match value {
-        Some(number) => Value::int(i64::from(number), span),
-        None => Value::nothing(span),
+        Some(number) => number.to_string(),
+        None => "null".to_string(),
     }
 }
 

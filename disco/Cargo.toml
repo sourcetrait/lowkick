@@ -22,5 +22,3 @@ publish = false
 [workspace.dependencies]
 jabdisco = { path = "crates/lib" }
 gilrs = "0.11"
-nuon = "0.115"
-nu-protocol = "0.115"

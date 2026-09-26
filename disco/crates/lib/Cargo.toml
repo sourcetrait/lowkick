@@ -11,5 +11,3 @@ publish.workspace = true
 
 [dependencies]
 gilrs.workspace = true
-nuon.workspace = true
-nu-protocol.workspace = true
