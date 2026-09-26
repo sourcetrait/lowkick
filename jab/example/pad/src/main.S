@@ -2,23 +2,23 @@
 # the graphics of bounce with simple physics; the left stick pushes
 # your sphere in any direction, harder the further it is pushed and
 # the longer it is held, up to three times the bouncing sphere's speed;
-# the dpad pushes at full strength along its eight directions; South
-# (A on the reference pad) stops it at once, as the space bar does; W,
-# A, S, D, and the space bar still work. Every other button of the
-# pad is given a colour of its own at startup, drawn at random, and
-# pressing it paints your sphere that colour. South and the colour
-# buttons announce themselves too: the button's evdev name, NORTH and
-# the rest, centred at the top of the screen in bold off-white at one
-# and a half times the console's font, staying while the button is
-# held and three seconds after it is released, or until another
-# button takes its place; at startup the pad's own name, as the device
+# the dpad pushes at full strength along its eight directions; either
+# stick pressed in, THUMBL or THUMBR, stops it at once, as the space
+# bar does; W, A, S, D, and the space bar still work. Every other
+# button of the pad is given a colour of its own at startup, drawn at
+# random, and pressing it paints your sphere that colour. The buttons
+# announce themselves too: the button's evdev name, NORTH and the
+# rest, centred at the top of the screen in bold off-white at one and
+# a half times the console's font, staying while the button is held
+# and three seconds after it is released, or until another button
+# takes its place; at startup the pad's own name, as the device
 # reports it, shows there for three seconds. The stick and the dpad
 # show themselves by moving the sphere and say nothing. The right
 # stick paints your sphere a colour made from its exact position, red
 # from its x, green from its y, blue from how far it is pushed, so the
 # stick's precision is seen, and it drives the sphere too, in its own
 # direction at a strength by thirds of its throw past the dead zone:
-# half of ACCEL, ACCEL, and one and a half. With no push the sphere
+# a quarter of ACCEL, ACCEL, and twice it. With no push the sphere
 # slows to a stop; the walls bounce it back at the speed it hit them,
 # and so does the other sphere. The other sphere starts somewhere and
 # bounces off the walls as in bounce, and off your sphere too. The two
@@ -27,8 +27,8 @@
 # The pad is read as a state each tick: the sticks' axes come
 # normalised to -JAB_PAD_FULL through JAB_PAD_FULL, 0 at rest, and the
 # left stick's drive is ACCEL scaled by each over full scale; the hat's
-# axes at full scale add ACCEL outright. The stop is an event, South
-# pressed, taken from jab.pad.input. With no pad on the machine the
+# axes at full scale add ACCEL outright. The stop is an event, THUMBL
+# or THUMBR pressed, taken from jab.pad.input. With no pad on the machine the
 # state reads zero and the example runs on the keyboard alone.
 #
 # Over the API, wasd's records both ways, little-endian, each field at
@@ -112,9 +112,9 @@
 .set LABEL_TICKS, (3 * JAB_DISPLAY_FPS_CAP)
 .set NAMED_BUTTONS, 16
 .set NO_BUTTON, -1
-# The right stick drives by thirds of its throw, in halves of ACCEL,
-# so the strongest push is ACCEL_MAX, which nothing exceeds
-.set ACCEL_MAX, (ACCEL * 3 / 2)
+# The right stick drives by thirds of its throw, in quarters of
+# ACCEL, so the strongest push is ACCEL_MAX, which nothing exceeds
+.set ACCEL_MAX, (ACCEL * 2)
 .set BAND, (JAB_PAD_FULL / 3)
 
 .section .text
@@ -285,9 +285,9 @@ read_api:
     ret
 
 # read_pad: take every pad event waiting; a button pressed announces
-# itself, South stopping your sphere and any other painting it that
-# button's colour; the announced button released starts its name's
-# three seconds; the axes are read as state each tick.
+# itself, THUMBL or THUMBR stopping your sphere and any other painting
+# it that button's colour; the announced button released starts its
+# name's three seconds; the axes are read as state each tick.
 read_pad:
 1:
     jab.pad.input
@@ -327,8 +327,11 @@ read_pad:
     la t1, label_changed
     li t2, 1
     sb t2, 0(t1)
-    li t1, JAB_BTN_SOUTH
+    li t1, JAB_BTN_THUMBL
+    beq a1, t1, 7f
+    li t1, JAB_BTN_THUMBR
     bne a1, t1, 6f
+7:
     la t0, player_vx
     sd zero, 0(t0)
     la t0, player_vy
@@ -524,8 +527,8 @@ apply_key:
 # drive_vector: the acceleration this frame, a0 along x and a1 along y
 # in fixed point: the held keys at ACCEL each way, the left stick's
 # axes at ACCEL scaled by each over full scale, the hat's at ACCEL
-# outright, and the right stick's along its own direction at half of
-# ACCEL, ACCEL, or one and a half by thirds of its throw, the sum held
+# outright, and the right stick's along its own direction at a quarter
+# of ACCEL, ACCEL, or twice it by thirds of its throw, the sum held
 # within ACCEL_MAX either way.
 drive_vector:
     addi sp, sp, -48
@@ -591,16 +594,16 @@ drive_vector:
     mv a0, t6
 22:
     li t4, BAND
-    li t1, 1                    # the low third, half of ACCEL
+    li t1, 1                    # the low third, a quarter of ACCEL
     bleu a0, t4, 23f
-    li t1, 2                    # the middle, ACCEL
+    li t1, 4                    # the middle, ACCEL
     slli t4, t4, 1
     bleu a0, t4, 23f
-    li t1, 3                    # the high, one and a half
+    li t1, 8                    # the high, twice ACCEL
 23:
     li t4, ACCEL
     mul t1, t1, t4
-    slli t4, t5, 1
+    slli t4, t5, 2
     ld t2, 16(sp)
     mul t2, t2, t1
     div t2, t2, t4

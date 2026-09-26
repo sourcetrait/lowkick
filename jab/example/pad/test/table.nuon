@@ -1,5 +1,5 @@
 # pad's table: the left stick full right for most of a second, then
-# centred, then South pressed and released, which stops your sphere,
+# centred, then THUMBR pressed and released, which stops your sphere,
 # then East, which paints it East's colour and names itself, then the
 # right stick full right, which paints it by position and drives it at
 # the high third's strength.
@@ -7,8 +7,8 @@
     [at, type, code, value];
     [1000ms, 3, 0, 255],
     [1800ms, 3, 0, 127],
-    [2500ms, 1, 304, 1],
-    [2600ms, 1, 304, 0],
+    [2500ms, 1, 318, 1],
+    [2600ms, 1, 318, 0],
     [2900ms, 1, 305, 1],
     [3000ms, 1, 305, 0],
     [3200ms, 3, 2, 255],

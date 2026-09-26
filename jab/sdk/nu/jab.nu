@@ -75,17 +75,17 @@ def cpu-model []: nothing -> string {
 def machine-args []: nothing -> list<string> {
     ["-machine" "virt" "-cpu" (cpu-model)] ++ $machine_rest
 }
-# The guest is named for the program, `Jab: <program>`, which is what
-# QEMU's window shows after its own prefix (SDL adds the console's
-# index, `QEMU (Jab: pad-0)`), and the threads are named (CPU 0/TCG and
-# the rest), so a per-thread listing reads; on Linux the process is
-# named jab, so `pgrep -x jab` finds it. `-name` alone names only the
-# guest, and `process=` is a Linux prctl that QEMU refuses to start
-# without elsewhere ("Change of process name not supported by your
-# OS"), so the process name is Linux's alone.
+# The guest is named for the program, `jab <program>`, which is what
+# QEMU's window shows inside its own prefix, hardcoded in every front
+# end (SDL adds the console's index too: `QEMU (jab pad-0)`), and the
+# threads are named (CPU 0/TCG and the rest), so a per-thread listing
+# reads; on Linux the process is named jab, so `pgrep -x jab` finds it.
+# `-name` alone names only the guest, and `process=` is a Linux prctl
+# that QEMU refuses to start without elsewhere ("Change of process name
+# not supported by your OS"), so the process name is Linux's alone.
 def name-args [program: string]: nothing -> list<string> {
     let process = (if $nu.os-info.name == "linux" { ",process=jab" } else { "" })
-    ["-name" $"Jab: ($program)($process),debug-threads=on"]
+    ["-name" $"jab ($program)($process),debug-threads=on"]
 }
 const display_device = ["-device" "virtio-gpu-device,xres=1920,yres=1080"]
 const input_devices = [
@@ -452,11 +452,11 @@ def wait-for-file [path: path]: nothing -> nothing {
 }
 
 # The Jab QEMU processes on this host, by their command line, which
-# every Jab line marks with `-name Jab:`: the QEMU itself, never the
+# every Jab line marks with `-name jab`: the QEMU itself, never the
 # `timeout` a test wraps it in, whose command line carries the same
 # words.
 def jab-pids []: nothing -> list<int> {
-    ps -l | where {|p| (($p.command | split row " " | first | path basename) == "qemu-system-riscv64") and ($p.command | str contains "-name Jab:") } | get pid
+    ps -l | where {|p| (($p.command | split row " " | first | path basename) == "qemu-system-riscv64") and ($p.command | str contains "-name jab") } | get pid
 }
 
 # The threads of a process with their cumulative CPU seconds: on Linux

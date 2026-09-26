@@ -106,15 +106,17 @@ it for the run; `JAB_PAD=/dev/input/eventN` names one outright, and
 keys as a mask and every axis by its evdev code normalised to signed
 16 bits, `jab.pad.input` for the events as evdev sends them, and
 `jab.pad.axis` for an axis's own range and `jab.pad.name` for its name;
-`example/pad` is wasd on the left stick, the dpad, and South, every
-other button painting the sphere a colour of its own and naming itself
-at the top of the screen for three seconds after it is let go, the
-pad's own name there at startup, and the right stick painting the
-sphere a colour made from its exact position while driving it by
-thirds of its throw, through `jab.display.text`, which draws a string
-anywhere in the framebuffer with the console's font at any scale. The
-window is titled `Jab: <program>` after QEMU's own prefix, which every
-front end hardcodes. The keyboard and the tablet come off
+`example/pad` is wasd on the left stick and the dpad, the sticks
+pressed in (THUMBL, THUMBR) stopping the sphere, every other button
+painting it a colour of its own and naming itself at the top of the
+screen for three seconds after it is let go, the pad's own name there
+at startup, and the right stick painting the sphere a colour made from
+its exact position while driving it by thirds of its throw at a
+quarter, one, and twice the usual push, through `jab.display.text`,
+which draws a string anywhere in the framebuffer with the console's
+font at any scale. The window is titled `jab <program>` inside QEMU's
+own prefix, which every front end hardcodes. The keyboard and the
+tablet come off
 the line with `--no-kbm`. QEMU's `virt` has eight virtio transports and
 the full line uses them all with a pad and the serial device, so a
 pad run with `--set debug` or `--api` needs `--no-kbm`; the tool
