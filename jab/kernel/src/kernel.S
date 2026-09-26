@@ -100,24 +100,18 @@ sys_kernel_flags:
     j trap_return
 
 # kernel_flags: the mask of what this kernel was built with, from the
-# symbols the assembler was given, JAB_KERNEL_* each. The kernel reads
-# it where a build symbol decides its behaviour at run time, so both
-# paths are in every kernel, and a program reads it by the call.
+# symbols the assembler was given, JAB_KERNEL_* each, so a program reads
+# at run time what it could also .ifdef at build.
 .ifdef DEBUG
 .set KERNEL_FLAG_DEBUG, JAB_KERNEL_DEBUG
 .else
 .set KERNEL_FLAG_DEBUG, 0
 .endif
-.ifdef DISPLAY_FLUSH_SCALED
-.set KERNEL_FLAG_DISPLAY_FLUSH, JAB_KERNEL_DISPLAY_FLUSH_SCALED
-.else
-.set KERNEL_FLAG_DISPLAY_FLUSH, 0
-.endif
 .section .rodata
 .balign 4
 .global kernel_flags
 kernel_flags:
-    .4byte (KERNEL_FLAG_DEBUG | KERNEL_FLAG_DISPLAY_FLUSH)
+    .4byte KERNEL_FLAG_DEBUG
 
 .section .bss
 .balign 16

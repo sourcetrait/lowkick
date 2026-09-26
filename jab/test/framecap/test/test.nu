@@ -20,10 +20,7 @@ def main [--kernel: path, --image: path, --out: path, --set: string = ""] {
     assert equal ($report.badrects | into int) 4 "a list with a rectangle past the edge is refused with 4"
     assert equal ($report.norects | into int) 4 "a list of no rectangles is refused with 4"
     let flags = ($report.flags | into int)
-    let symbols = ($set | split row "," | each {|s| $s | str trim })
-    assert equal ($flags | bits and 1) 1 $"the kernel reports DEBUG, which every test build sets: flags ($flags)"
-    let scaled = ("DISPLAY_FLUSH_SCALED" in $symbols)
-    assert equal (($flags | bits and 2) == 2) $scaled $"the kernel reports DISPLAY_FLUSH_SCALED as the build set it, ($symbols): flags ($flags)"
+    assert equal $flags 1 $"the kernel reports DEBUG and nothing else, as every test build sets it: flags ($flags)"
     assert ($run.wall_seconds >= 2.0) $"sixty-four frames at thirty-two a second take two seconds: ($run.wall_seconds)"
     assert ($run.wall_seconds < 6.0) $"and not much more: ($run.wall_seconds)"
     print $"framecap: ($refused) refused; QEMU used ($run.cpu_seconds) CPU seconds over ($run.wall_seconds | math round -p 2) seconds"

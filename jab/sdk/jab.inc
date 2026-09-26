@@ -71,15 +71,10 @@
 
 # What the kernel was built with, as jab.kernel.flags reports it: a
 # mask of these. JAB_KERNEL_DEBUG: DEBUG was set, so the kernel's own
-# lines go to its debug channel. JAB_KERNEL_DISPLAY_FLUSH_SCALED:
-# DISPLAY_FLUSH_SCALED was set, which the tool does where the host's
-# window charges a flush by the area it covers (SDL, GTK) and not where
-# every flush costs the same whatever its size (Cocoa); it decides how
-# jab.display.flip.rects shows a list, rectangle by rectangle, or once
-# as the one rectangle holding them all. A program can .ifdef the same
-# symbols at build, since every symbol reaches it too.
+# lines go to its debug channel. A program can .ifdef the same symbols
+# at build, since every symbol reaches it too; the call is for the
+# same fact at run time.
 .set JAB_KERNEL_DEBUG, 1
-.set JAB_KERNEL_DISPLAY_FLUSH_SCALED, 2
 
 # A sprite: frames of pixels in the framebuffer's own format, which the
 # program owns and jab.sprite.draw blends onto the screen. The record is
@@ -342,11 +337,13 @@
 .endm
 
 # jab.display.flip.rects buffer, count: show that many rectangles of
-# the framebuffer, JAB_RECT_SIZE bytes each from the buffer, and
-# nothing else, as one flip: what jab.display.flip.rect is for several
-# changed areas at once, the host copying and painting only what is
-# listed. The same codes, 4 when the count is 0 or any rectangle is
-# empty or reaches outside the screen, in which case nothing is shown.
+# the framebuffer, JAB_RECT_SIZE bytes each from the buffer, as one
+# flip: what jab.display.flip.rect is for several changed areas at
+# once. The host copies only the rectangles listed and paints once,
+# the rectangle holding them all, so a busy screen costs the host one
+# draw a tick whatever the list. The same codes, 4 when the count is 0
+# or any rectangle is empty or reaches outside the screen, in which
+# case nothing is shown.
 .macro jab.display.flip.rects buffer, count
     mv a1, \count
     mv a0, \buffer
@@ -355,7 +352,7 @@
 .endm
 
 # jab.kernel.flags: a0 becomes the mask of what the kernel was built
-# with, JAB_KERNEL_DEBUG and JAB_KERNEL_DISPLAY_FLUSH_SCALED.
+# with, JAB_KERNEL_DEBUG.
 .macro jab.kernel.flags
     li a7, JAB_SYS_KERNEL_FLAGS
     ecall

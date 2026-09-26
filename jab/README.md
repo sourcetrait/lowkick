@@ -39,16 +39,15 @@ sets `DEBUG`, so a program's own debug reporting is there for its test;
 release kernel carries no debug code and no debug text, which
 `test/purity` checks.
 
-One symbol the host sets on its own: `DISPLAY_FLUSH_SCALED`, on Linux
-and Windows, where the window charges a flush of the screen by the
-area it covers, and not on macOS, where every flush costs the same
-whatever its size. It decides how the kernel shows a list of
-rectangles, one flush each or one flush of the rectangle holding them
-all, so that a busy screen is cheap under either window. The kernel
-reports what it was built with to a program through `jab.kernel.flags`,
-a mask of `JAB_KERNEL_DEBUG` and `JAB_KERNEL_DISPLAY_FLUSH_SCALED`;
-`JAB_DISPLAY=cocoa just build` builds the other class anywhere, for
-measuring.
+The kernel reports what it was built with to a program through
+`jab.kernel.flags`, a mask with `JAB_KERNEL_DEBUG` at bit 0, the same
+fact at run time that `.ifdef DEBUG` is at build. A list of rectangles
+flipped at once crosses to the host rectangle by rectangle and is
+painted once, as the rectangle holding them all: a paint costs the
+host's window a fixed price and a wait however small it is, and a
+window drawn on a timer draws late by as long as the paints take, so
+one a tick is what keeps a busy screen smooth under SDL and Cocoa
+alike.
 
 With `DEBUG` the kernel's own lines leave the console: they go to a
 debug channel, a virtio-serial port, which `just run ... --set debug`

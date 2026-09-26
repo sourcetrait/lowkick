@@ -49,9 +49,13 @@ const memory = ["-m" "4G"]
 # set, and Sstc is optional there, so the frame clock would fault.
 const cpu_profile = "rva23s64,pmp=true"
 const cpu_generic = "rv64,pmp=true"
+# No parallel port: QEMU's default is a text console of its own, which
+# under SDL is a second, hidden window with its own GL context, drawn
+# on every refresh its cursor blinks.
 const machine_rest = [
     "-accel" "tcg" "-smp" "4"
     "-global" "virtio-mmio.force-legacy=false"
+    "-parallel" "none"
 ]
 
 # The CPU model for this host's QEMU: JAB_CPU as given, else the RVA23
@@ -306,16 +310,6 @@ def symbols [set: string]: nothing -> list<string> {
 
 # A test build's symbols: whatever was asked, and DEBUG.
 def with-debug [names: list<string>]: nothing -> list<string> { $names | append "DEBUG" | uniq | sort }
-
-# The symbol the host adds to every build: DISPLAY_FLUSH_SCALED where
-# the window a run would open charges a flush by its area, SDL and GTK,
-# and nothing under cocoa, which charges every flush alike. The window
-# is JAB_DISPLAY's or the host's own, never a manifest's, so a tree
-# holds one class; `JAB_DISPLAY=cocoa` builds the other kernel on any
-# host, for measuring.
-def with-host [names: list<string>]: nothing -> list<string> {
-    if ((display {}) | str starts-with "cocoa") { $names } else { $names | append "DISPLAY_FLUSH_SCALED" | uniq | sort }
-}
 
 # Which tree a build lands in: debug with DEBUG set, else release.
 def profile [names: list<string>]: nothing -> string { if "DEBUG" in $names { "debug" } else { "release" } }
@@ -895,7 +889,7 @@ def sdl-report [log: path]: nothing -> record {
 # Build the kernel and every program of the workspace at `ws`; release
 # unless --set says otherwise.
 def "main workspace build" [ws: path, --set: string = ""] {
-    workspace-build $ws (with-host (symbols $set))
+    workspace-build $ws (symbols $set)
 }
 
 # Test every program, a category, or one program, on a build with DEBUG
@@ -903,7 +897,7 @@ def "main workspace build" [ws: path, --set: string = ""] {
 # summary, exits 1 if any fails. A test that drives the API asks
 # `jab launch` for the port itself.
 def "main workspace test" [ws: path, category: string = "", name: string = "", --set: string = ""] {
-    let names = (with-host (with-debug (symbols $set)))
+    let names = (with-debug (symbols $set))
     workspace-build $ws $names
     let m = (open ($ws | path join "workspace.jab.toml"))
     let selected = ($m.programs | where {|p| ($category == "" or ($p | str starts-with $"($category)/")) and ($name == "" or ($p | path basename) == $name) })
@@ -924,7 +918,7 @@ def "main workspace test" [ws: path, category: string = "", name: string = "", -
 # release unless --set says otherwise, the API's port on the machine
 # with --api.
 def "main workspace run" [ws: path, category: string, name: string, --set: string = "", --api] {
-    let names = (with-host (symbols $set))
+    let names = (symbols $set)
     workspace-build $ws $names
     run-program ($ws | path join $category $name) $names $api
 }
@@ -934,7 +928,7 @@ def "main workspace run" [ws: path, category: string, name: string, --set: strin
 # otherwise. Prints one NUON record on how the program's flips reached
 # the window.
 def "main workspace probe" [ws: path, kind: string, category: string, name: string, --seconds: int = 12, --set: string = ""] {
-    let names = (with-host (symbols $set))
+    let names = (symbols $set)
     workspace-build $ws $names
     probe ($ws | path join $category $name) $kind $names $seconds
 }
@@ -942,26 +936,26 @@ def "main workspace probe" [ws: path, kind: string, category: string, name: stri
 # Build the kernel at `dir` (--kernel) or the program at `dir`; release
 # unless --set says otherwise.
 def "main build" [dir: path, --kernel, --set: string = ""] {
-    let names = (with-host (symbols $set))
+    let names = (symbols $set)
     if $kernel { build-kernel $dir $names } else { build-program $dir $names }
 }
 
 # Build the program at `dir` with DEBUG set beside whatever --set names
 # and run its test/test.nu on the debug kernel.
 def "main test" [dir: path, --set: string = ""] {
-    ^nu ...(test-args (prepared $dir (with-host (with-debug (symbols $set)))))
+    ^nu ...(test-args (prepared $dir (with-debug (symbols $set))))
 }
 
 # Build the program at `dir` and run it with the console window; release
 # unless --set says otherwise, the API's port on the machine with --api.
 def "main run" [dir: path, --set: string = "", --api] {
-    run-program $dir (with-host (symbols $set)) $api
+    run-program $dir (symbols $set) $api
 }
 
 # Build the program at `dir` and probe it under a window for --seconds;
 # release unless --set says otherwise. `sdl` is the one probe.
 def "main probe" [dir: path, kind: string, --seconds: int = 12, --set: string = ""] {
-    probe $dir $kind (with-host (symbols $set)) $seconds
+    probe $dir $kind (symbols $set) $seconds
 }
 
 # Remove the kernel's (--kernel) or the program's build output from both
